@@ -8,10 +8,12 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.*
@@ -109,10 +112,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AutoSetupScreen() {
     var devMode by remember { mutableStateOf(true) }
-    var antiBot by remember { mutableStateOf(true) }
+    var antiBot by remember { mutableStateOf(RideAccessibilityService.isAntiBotEnabled) }
     var silenceApps by remember { mutableStateOf(false) }
-    var fastMode by remember { mutableStateOf(true) }
-    var botActive by remember { mutableStateOf(true) }
+    var fastMode by remember { mutableStateOf(RideAccessibilityService.isFastTurboMode) }
+    var botActive by remember { mutableStateOf(RideAccessibilityService.isBotRunning) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -132,7 +135,6 @@ fun AutoSetupScreen() {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Quick Setup Card
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = CardDark),
@@ -161,7 +163,6 @@ fun AutoSetupScreen() {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Bot Safety & Engine
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = CardDark),
@@ -185,7 +186,6 @@ fun AutoSetupScreen() {
             }
         }
 
-        // Floating Power Button
         FloatingActionButton(
             onClick = {
                 botActive = !botActive
@@ -205,13 +205,83 @@ fun AutoSetupScreen() {
 
 @Composable
 fun SettingsScreen() {
-    var rejectBelow by remember { mutableStateOf(0f) }
-    var acceptAbove by remember { mutableStateOf(40f) }
+    var rejectBelow by remember { mutableStateOf(RideAccessibilityService.rejectBelowFare.toInt()) }
+    var acceptAbove by remember { mutableStateOf(RideAccessibilityService.acceptAboveFare.toInt()) }
+
+    var showDialogFor by remember { mutableStateOf<String?>(null) } // "min" or "max"
+    var tempFareText by remember { mutableStateOf("") }
 
     var rapidoEnabled by remember { mutableStateOf(true) }
     var uberEnabled by remember { mutableStateOf(true) }
     var olaEnabled by remember { mutableStateOf(true) }
     var porterEnabled by remember { mutableStateOf(true) }
+
+    // Number Input Popup Dialog
+    if (showDialogFor != null) {
+        val isMin = showDialogFor == "min"
+        val title = if (isMin) "Min Fare" else "Max Fare"
+
+        AlertDialog(
+            onDismissRequest = { showDialogFor = null },
+            containerColor = Color(0xFF1B1E1C),
+            shape = RoundedCornerShape(20.dp),
+            title = {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = tempFareText,
+                    onValueChange = { input ->
+                        if (input.all { it.isDigit() } && input.length <= 5) {
+                            tempFareText = input
+                        }
+                    },
+                    prefix = { Text("₹ ", color = PrimaryGreen, fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+                    textStyle = LocalTextStyle.current.copy(
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = PrimaryGreen,
+                        unfocusedBorderColor = CardBorder,
+                        cursorColor = PrimaryGreen
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val value = tempFareText.toIntOrNull() ?: 0
+                        if (isMin) {
+                            rejectBelow = value
+                            RideAccessibilityService.rejectBelowFare = value.toDouble()
+                        } else {
+                            acceptAbove = value
+                            RideAccessibilityService.acceptAboveFare = value.toDouble()
+                        }
+                        showDialogFor = null
+                    }
+                ) {
+                    Text("Set", color = PrimaryGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialogFor = null }) {
+                    Text("Cancel", color = TextGray, fontSize = 16.sp)
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -219,64 +289,96 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        Text("📊 FARE CONTROLS", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("Custom ranges from ₹0 to ₹2000", color = TextGray, fontSize = 13.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("₹ Fare Controls", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = PrimaryGreen)
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = CardDark),
+        // Info Banner
+        Surface(
+            color = Color(0xFF14241B),
+            shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("🔴 Reject Below", color = AlertRed, fontWeight = FontWeight.SemiBold)
-                    Text("₹${rejectBelow.toInt()}", color = AlertRed, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-                Slider(
-                    value = rejectBelow,
-                    onValueChange = {
-                        rejectBelow = it
-                        RideAccessibilityService.rejectBelowFare = it.toDouble()
-                        if (rejectBelow > acceptAbove) {
-                            acceptAbove = rejectBelow
-                            RideAccessibilityService.acceptAboveFare = acceptAbove.toDouble()
-                        }
-                    },
-                    valueRange = 0f..2000f,
-                    colors = SliderDefaults.colors(thumbColor = AlertRed, activeTrackColor = AlertRed)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("🟢 Accept Above", color = PrimaryGreen, fontWeight = FontWeight.SemiBold)
-                    Text("₹${acceptAbove.toInt()}", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-                Slider(
-                    value = acceptAbove,
-                    onValueChange = {
-                        acceptAbove = it
-                        RideAccessibilityService.acceptAboveFare = it.toDouble()
-                        if (acceptAbove < rejectBelow) {
-                            rejectBelow = acceptAbove
-                            RideAccessibilityService.rejectBelowFare = rejectBelow.toDouble()
-                        }
-                    },
-                    valueRange = 0f..2000f,
-                    colors = SliderDefaults.colors(thumbColor = PrimaryGreen, activeTrackColor = PrimaryGreen)
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Reject below ₹$rejectBelow, accept above ₹$acceptAbove",
+                    color = PrimaryGreen,
+                    fontSize = 13.sp
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Interactive Clickable Fare Cards
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Min Fare (Reject) Card
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF261818)),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable {
+                        tempFareText = rejectBelow.toString()
+                        showDialogFor = "min"
+                    }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Min Fare (Reject)", color = AlertRed, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("₹$rejectBelow", color = AlertRed, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Tap to edit", color = TextGray, fontSize = 10.sp)
+                }
+            }
+
+            // Max Fare (Accept) Card
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF14261B)),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable {
+                        tempFareText = acceptAbove.toString()
+                        showDialogFor = "max"
+                    }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Max Fare (Accept)", color = PrimaryGreen, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("₹$acceptAbove", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Tap to edit", color = TextGray, fontSize = 10.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text("🛵 SUPPORTED PLATFORMS", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
