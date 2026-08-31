@@ -12,18 +12,27 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
-import androidx.core.content.ContextCompat
 
 class FloatingWidgetService : Service() {
 
+    companion object {
+        var instance: FloatingWidgetService? = null
+
+        fun refreshIconState() {
+            instance?.floatingView?.let {
+                instance?.updateButtonState(it)
+            }
+        }
+    }
+
     private var windowManager: WindowManager? = null
-    private var floatingView: ImageView? = null
+    var floatingView: ImageView? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-
+        instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
         floatingView = ImageView(this).apply {
@@ -48,7 +57,7 @@ class FloatingWidgetService : Service() {
             150,
             150,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -56,7 +65,6 @@ class FloatingWidgetService : Service() {
             y = 500
         }
 
-        // Drag to move logic
         floatingView?.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
@@ -99,7 +107,7 @@ class FloatingWidgetService : Service() {
         windowManager?.addView(floatingView, params)
     }
 
-    private fun updateButtonState(view: ImageView) {
+    fun updateButtonState(view: ImageView) {
         val isRunning = RideAccessibilityService.isBotRunning
         val bgColor = if (isRunning) Color.parseColor("#1B2E21") else Color.parseColor("#2E1B1B")
         val borderColor = if (isRunning) Color.parseColor("#00E676") else Color.parseColor("#FF5252")
@@ -120,5 +128,6 @@ class FloatingWidgetService : Service() {
         if (floatingView != null) {
             windowManager?.removeView(floatingView)
         }
+        instance = null
     }
 }
