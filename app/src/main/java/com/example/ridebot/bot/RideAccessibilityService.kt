@@ -42,7 +42,7 @@ class RideAccessibilityService : AccessibilityService() {
         var isAntiBotEnabled = true
         var minTargetFare: Double = 1.0
         var maxTargetFare: Double = 2000.0
-        var maxPickupDistanceKm: Double = 2.5 // Default 2.5 km (0.0 km to 5.0 km)
+        var maxPickupDistanceKm: Double = 5.0 // Default 5.0 km
 
         val rideLogs = mutableStateListOf<RideLogItem>()
 
@@ -85,22 +85,21 @@ class RideAccessibilityService : AccessibilityService() {
         val metrics: DisplayMetrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
+        Log.d(TAG, "Service Connected: $screenWidth x $screenHeight")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val currentTime = System.currentTimeMillis()
-        if (currentTime - lastActionTimestamp < 2500) return
+        if (currentTime - lastActionTimestamp < 2000) return
 
         val pkgName = event?.packageName?.toString() ?: ""
         val appDetected = when {
             pkgName.contains("rapido", ignoreCase = true) -> "Rapido"
-            pkgName.contains("ubercab.driver", ignoreCase = true) || pkgName.contains("uber", ignoreCase = true) -> "Uber Driver"
-            pkgName.contains("olacabs.partner", ignoreCase = true) -> "Ola Partner"
+            pkgName.contains("uber", ignoreCase = true) -> "Uber Driver"
+            pkgName.contains("ola", ignoreCase = true) -> "Ola Partner"
             pkgName.contains("porter", ignoreCase = true) -> "Porter"
-            else -> ""
+            else -> "Ride App"
         }
-
-        if (appDetected.isEmpty()) return
 
         val allNodes = ArrayList<AccessibilityNodeInfo>()
         val windowList = windows
@@ -116,47 +115,44 @@ class RideAccessibilityService : AccessibilityService() {
 
         if (allNodes.isEmpty()) return
 
-        val isRealRideCard = verifyIncomingRideOffer(allNodes, appDetected)
-        if (!isRealRideCard) return
-
+        // 1. Find Action Button (Confirm or Accept)
         val actionButton = findActionTarget(allNodes) ?: return
+
+        // 2. Parse Real Main Fare
         val detectedFare = parseFareFromOfferCard(allNodes)
-
-        if (detectedFare == null || detectedFare <= 0.0) return
-
         val rideDetails = parseRideDetails(allNodes)
         val pickupKmValue = extractKmNumber(rideDetails.pickupDist)
 
         lastActionTimestamp = currentTime
 
-        Log.d(TAG, "Valid Offer on $appDetected! Fare: ₹$detectedFare | Pickup Dist: ${rideDetails.pickupDist} ($pickupKmValue km) | Max Allowed Pickup: $maxPickupDistanceKm km")
+        Log.d(TAG, "🚀 Offer Detected on $appDetected! Fare: ₹$detectedFare | Pickup: ${rideDetails.pickupDist} | Button: ${actionButton.text}")
 
-        // 🟢 AGAR BOT ON HAI
+        // 3. AGAR BOT ON HAI
         if (isBotRunning) {
-            val isFareInRange = detectedFare in minTargetFare..maxTargetFare
+            val finalFare = detectedFare ?: 0.0
+            val isFareInRange = (finalFare in minTargetFare..maxTargetFare) || (finalFare == 0.0 && minTargetFare <= 10.0)
             val isPickupInRange = (pickupKmValue == null) || (pickupKmValue <= maxPickupDistanceKm)
 
             if (isFareInRange && isPickupInRange) {
-                // ACCEPT RIDE
-                performClickAction(actionButton)
+                // 🟢 ACCEPT ACTION (Physical Gesture + Node Click)
+                performAcceptClick(actionButton)
                 addLog(
                     appName = appDetected,
-                    fare = detectedFare,
+                    fare = finalFare,
                     pickupDist = rideDetails.pickupDist,
                     dropDist = rideDetails.dropDist,
                     pickupLoc = rideDetails.pickupLoc,
                     dropLoc = rideDetails.dropLoc,
                     status = RideStatus.AUTO_ACCEPTED,
-                    note = "Accepted: Fare ₹$detectedFare | Pickup ${rideDetails.pickupDist} <= $maxPickupDistanceKm km"
+                    note = "Auto accepted: ₹$finalFare (Pickup: ${rideDetails.pickupDist})"
                 )
-                return
             } else {
-                // REJECT RIDE
-                val rejectReason = if (!isFareInRange) "Fare ₹$detectedFare out of range" else "Pickup ${rideDetails.pickupDist} > $maxPickupDistanceKm km limit"
+                // 🔴 REJECT ACTION
+                val rejectReason = if (!isFareInRange) "Fare ₹$finalFare out of range" else "Pickup ${rideDetails.pickupDist} > $maxPickupDistanceKm km limit"
                 executeRejectAction(allNodes, actionButton)
                 addLog(
                     appName = appDetected,
-                    fare = detectedFare,
+                    fare = finalFare,
                     pickupDist = rideDetails.pickupDist,
                     dropDist = rideDetails.dropDist,
                     pickupLoc = rideDetails.pickupLoc,
@@ -164,7 +160,6 @@ class RideAccessibilityService : AccessibilityService() {
                     status = RideStatus.REJECTED,
                     note = "Rejected: $rejectReason"
                 )
-                return
             }
         }
     }
@@ -176,52 +171,53 @@ class RideAccessibilityService : AccessibilityService() {
         return match?.groupValues?.get(1)?.toDoubleOrNull()
     }
 
-    private fun verifyIncomingRideOffer(nodes: List<AccessibilityNodeInfo>, app: String): Boolean {
-        val texts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
-            .map { it.trim().lowercase() }
-
-        val hasTripIndicator = texts.any {
-            it.contains("order") || 
-            it.contains("trip") || 
-            it.contains("bike") || 
-            it.contains("auto") || 
-            it.contains("mins") || 
-            it.contains("min") || 
-            it.contains("km") || 
-            it.contains("cash payment") ||
-            it.contains("accept") ||
-            it.contains("confirm")
-        }
-
-        val hasActionButton = nodes.any { node ->
-            val t = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
-            t == "accept" || t == "confirm" || t == "स्वीकार"
-        }
-
-        return hasTripIndicator && hasActionButton
-    }
-
     private fun parseFareFromOfferCard(nodes: List<AccessibilityNodeInfo>): Double? {
         val texts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
+            .map { it.trim() }
             .filter { it.isNotBlank() }
 
+        val fareCandidates = mutableListOf<Double>()
+
         for (t in texts) {
-            val clean = t.trim()
-            if ((clean.contains("₹") || clean.contains("Rs", ignoreCase = true) || clean.contains("INR", ignoreCase = true)) &&
-                !clean.contains("/hr", ignoreCase = true) &&
-                !clean.contains("Premium", ignoreCase = true) &&
-                !clean.contains("active hr", ignoreCase = true) &&
-                !clean.contains("today", ignoreCase = true) &&
-                !clean.contains("balance", ignoreCase = true)
+            // Ignore extra/premium/hourly lines
+            if (t.contains("/hr", ignoreCase = true) ||
+                t.contains("active hr", ignoreCase = true) ||
+                t.contains("Includes", ignoreCase = true) ||
+                t.contains("extra", ignoreCase = true) ||
+                t.contains("Premium", ignoreCase = true) ||
+                t.contains("today", ignoreCase = true) ||
+                t.contains("balance", ignoreCase = true)
             ) {
+                continue
+            }
+
+            if (t.contains("₹") || t.contains("Rs", ignoreCase = true) || t.contains("INR", ignoreCase = true)) {
                 val regex = Regex("""(?:₹|Rs\.?|INR)\s*(\d+(?:,\d+)*(?:\.\d+)?)""")
-                val match = regex.find(clean)
+                val match = regex.find(t)
                 if (match != null) {
                     val num = match.groupValues[1].replace(",", "").toDoubleOrNull()
-                    if (num != null && num in 10.0..5000.0) return num
+                    if (num != null && num in 15.0..5000.0) {
+                        fareCandidates.add(num)
+                    }
                 }
             }
         }
+
+        // Return the first dominant fare found (e.g. ₹41.86)
+        if (fareCandidates.isNotEmpty()) {
+            return fareCandidates[0]
+        }
+
+        // Fallback plain number
+        for (t in texts) {
+            if (!t.contains("km", ignoreCase = true) && !t.contains("min", ignoreCase = true) && !t.contains("★")) {
+                if (t.matches(Regex("""^\d+(\.\d{1,2})?$"""))) {
+                    val num = t.toDoubleOrNull()
+                    if (num != null && num in 20.0..3000.0) return num
+                }
+            }
+        }
+
         return null
     }
 
@@ -250,6 +246,8 @@ class RideAccessibilityService : AccessibilityService() {
             if ((t.contains("Delhi", ignoreCase = true) ||
                  t.contains("Nagar", ignoreCase = true) ||
                  t.contains("Bagh", ignoreCase = true) ||
+                 t.contains("Chowk", ignoreCase = true) ||
+                 t.contains("Dairy", ignoreCase = true) ||
                  t.contains("Road", ignoreCase = true) ||
                  t.contains("Sector", ignoreCase = true) ||
                  t.contains("Gali", ignoreCase = true) ||
@@ -288,14 +286,14 @@ class RideAccessibilityService : AccessibilityService() {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
             val viewId = (node.viewIdResourceName ?: "").lowercase()
 
-            val isAcceptOrConfirm = text == "confirm" ||
-                    text == "accept" ||
-                    text.contains("confirm") ||
+            val isAcceptOrConfirm = text.contains("confirm") ||
                     text.contains("accept") ||
                     text.contains("स्वीकार") ||
+                    text.contains("take ride") ||
                     viewId.contains("confirm") ||
                     viewId.contains("accept") ||
-                    viewId.contains("btn_accept")
+                    viewId.contains("btn_accept") ||
+                    viewId.contains("primary_button")
 
             if (isAcceptOrConfirm) {
                 var target = node
@@ -342,10 +340,21 @@ class RideAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Uber Cross Fallback
+        // Uber Cross Fallback (Top Right of sheet)
         val crossX = screenWidth * 0.85f
-        val crossY = screenHeight * 0.42f
+        val crossY = screenHeight * 0.38f
         clickDirectCoordinate(crossX, crossY, null)
+    }
+
+    private fun performAcceptClick(node: AccessibilityNodeInfo) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+
+        // Uber / Rapido Bottom Action coordinates
+        val x = if (rect.centerX() > 0) rect.centerX().toFloat() else screenWidth * 0.5f
+        val y = if (rect.centerY() > 0) rect.centerY().toFloat() else screenHeight * 0.92f
+
+        clickDirectCoordinate(x, y, node)
     }
 
     private fun performClickAction(node: AccessibilityNodeInfo) {
@@ -359,17 +368,19 @@ class RideAccessibilityService : AccessibilityService() {
     }
 
     private fun clickDirectCoordinate(x: Float, y: Float, node: AccessibilityNodeInfo?) {
-        val delay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (30L..80L).random() else 10L
+        val delay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (20L..50L).random() else 10L
 
         handler.postDelayed({
+            // 1. Hardware-level Physical Touch (100ms gesture ensures registration on HyperOS/OxygenOS/Android 13/14)
             val path = Path().apply {
                 moveTo(x, y)
             }
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 30))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
                 .build()
             dispatchGesture(gesture, null, null)
 
+            // 2. Direct Node Click
             node?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             node?.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }, delay)
