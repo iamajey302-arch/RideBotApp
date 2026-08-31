@@ -43,7 +43,7 @@ class RideAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isBotRunning || event == null) return
 
-        val pkgName = event.packageName?.toString() ?: return
+        val pkgName = event.packageName?.toString() ?: ""
 
         if (targetPackages.any { pkgName.contains(it, ignoreCase = true) } ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -58,32 +58,40 @@ class RideAccessibilityService : AccessibilityService() {
         val allNodes = ArrayList<AccessibilityNodeInfo>()
         collectAllNodes(root, allNodes)
 
+        // 1. Scan Fare strictly from all screen elements
         var detectedFare: Double? = null
         for (node in allNodes) {
-            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
-            val fare = extractFare(text)
+            val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
+            val fare = extractStrictFare(text)
             if (fare != null && fare > 0) {
                 detectedFare = fare
                 break
             }
         }
 
+        // 2. Strict Decision Making
         if (detectedFare != null) {
-            Log.d(TAG, "Detected Fare: ₹$detectedFare")
+            Log.d(TAG, "Screen Fare Detected: ₹$detectedFare | Accept Limit: ₹$acceptAboveFare | Reject Limit: ₹$rejectBelowFare")
 
+            // 🔴 Agar Fare Minimum Reject limit se kam hai -> Reject
             if (detectedFare < rejectBelowFare) {
-                Log.d(TAG, "Fare ₹$detectedFare is BELOW threshold ₹$rejectBelowFare -> REJECTING RIDE")
-                performRejectAction(allNodes)
+                Log.d(TAG, "Fare ₹$detectedFare is strictly LOWER than ₹$rejectBelowFare -> REJECTING")
+                executeRejectFlow(allNodes)
                 return
             }
 
+            // 🟢 Agar Fare Accept limit se zyada ya barabar hai -> Accept
             if (detectedFare >= acceptAboveFare) {
-                Log.d(TAG, "Fare ₹$detectedFare is ABOVE threshold ₹$acceptAboveFare -> ACCEPTING RIDE")
-                performAcceptAction(allNodes)
+                Log.d(TAG, "Fare ₹$detectedFare is EQUAL/HIGHER than ₹$acceptAboveFare -> ACCEPTING")
+                executeAcceptFlow(allNodes)
                 return
             }
+
+            // 🟡 Agar Beech ka Fare hai -> Ignore (Do nothing)
+            Log.d(TAG, "Fare ₹$detectedFare is between limits. No action taken.")
         } else {
-            performAcceptAction(allNodes)
+            // STRICT SAFETY: Agar Fare detect NAHI hua, toh blind click bilkul NAHI karenge
+            Log.d(TAG, "No valid fare symbol detected on screen. Skipping auto-accept for safety.")
         }
     }
 
@@ -99,60 +107,78 @@ class RideAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun extractFare(text: String): Double? {
-        val regex = Regex("""[₹RsRS\.]*\s*(\d+[\d,]*)""")
-        val match = regex.find(text) ?: return null
-        return match.groupValues[1].replace(",", "").toDoubleOrNull()
+    private fun extractStrictFare(text: String): Double? {
+        if (text.isBlank()) return null
+
+        // Ignore distance (km, m) and rating / timings
+        if (text.contains("km", ignoreCase = true) || text.contains("mins", ignoreCase = true) || text.contains("min", ignoreCase = true)) {
+            // Agar string me sirf distance hai toh ignore karein
+            if (!text.contains("₹") && !text.contains("Rs", ignoreCase = true)) return null
+        }
+
+        // Match ₹120, ₹ 120, Rs. 120, 120 ₹, etc.
+        val regexWithSymbol = Regex("""(?:₹|Rs\.?|INR)\s*(\d+(?:,\d+)*(?:\.\d+)?)""")
+        val match = regexWithSymbol.find(text)
+        if (match != null) {
+            return match.groupValues[1].replace(",", "").toDoubleOrNull()
+        }
+
+        // Alternative check: "120 ₹"
+        val regexSuffix = Regex("""(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:₹|Rs|INR)""")
+        val matchSuffix = regexSuffix.find(text)
+        if (matchSuffix != null) {
+            return matchSuffix.groupValues[1].replace(",", "").toDoubleOrNull()
+        }
+
+        return null
     }
 
-    private fun performRejectAction(nodes: List<AccessibilityNodeInfo>) {
-        var clicked = false
-
+    private fun executeRejectFlow(nodes: List<AccessibilityNodeInfo>) {
         for (node in nodes) {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
             val viewId = node.viewIdResourceName?.lowercase() ?: ""
 
             val isRejectBtn = text.contains("reject") ||
                     text.contains("decline") ||
-                    text.contains("cancel") ||
                     text.contains("dismiss") ||
                     text.contains("skip") ||
+                    text.contains("cancel") ||
                     text.contains("✕") ||
                     text.contains("x") ||
                     viewId.contains("reject") ||
-                    viewId.contains("close") ||
                     viewId.contains("cancel") ||
-                    viewId.contains("cross")
+                    viewId.contains("close") ||
+                    viewId.contains("dismiss")
 
             if (isRejectBtn) {
-                Log.d(TAG, "Reject button matched: $text | ID: $viewId")
+                Log.d(TAG, "Direct Reject button found, clicking: $text")
                 triggerClick(node)
-                clicked = true
-                break
+                return
             }
         }
 
-        if (!clicked) {
-            Log.d(TAG, "Tapping fallback top-right reject coordinate")
-            clickCoordinate((screenWidth * 0.88f), (screenHeight * 0.35f), null)
-        }
+        // Swipe down & Back action fallback to clear the popup
+        swipeToDismiss()
+        handler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 150)
     }
 
-    private fun performAcceptAction(nodes: List<AccessibilityNodeInfo>) {
+    private fun executeAcceptFlow(nodes: List<AccessibilityNodeInfo>) {
         for (node in nodes) {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
             val viewId = node.viewIdResourceName?.lowercase() ?: ""
 
-            val isAcceptBtn = text.contains("accept") || 
-                    text.contains("स्वीकार") || 
-                    text.contains("take ride") || 
+            val isAcceptBtn = text.contains("accept") ||
+                    text.contains("स्वीकार") ||
+                    text.contains("take ride") ||
                     text.contains("book") ||
                     text.contains("order") ||
-                    viewId.contains("accept") || 
+                    viewId.contains("accept") ||
                     viewId.contains("confirm")
 
             if (isAcceptBtn) {
-                Log.d(TAG, "Accept button matched: $text")
+                Log.d(TAG, "Accept button found, clicking: $text")
                 triggerClick(node)
                 break
             }
@@ -168,23 +194,36 @@ class RideAccessibilityService : AccessibilityService() {
             return
         }
 
-        clickCoordinate(rect.centerX().toFloat(), rect.centerY().toFloat(), node)
-    }
-
-    private fun clickCoordinate(x: Float, y: Float, fallbackNode: AccessibilityNodeInfo?) {
-        val clickDelay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (150L..350L).random() else 50L
+        val clickDelay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (120L..280L).random() else 40L
 
         handler.postDelayed({
             val path = Path().apply {
-                moveTo(x, y)
+                moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
             }
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 40))
                 .build()
 
             dispatchGesture(gesture, null, null)
-            fallbackNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }, clickDelay)
+    }
+
+    private fun swipeToDismiss() {
+        val startX = screenWidth * 0.5f
+        val startY = screenHeight * 0.4f
+        val endY = screenHeight * 0.85f
+
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(startX, endY)
+        }
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 200))
+            .build()
+
+        dispatchGesture(gesture, null, null)
     }
 
     override fun onInterrupt() {
