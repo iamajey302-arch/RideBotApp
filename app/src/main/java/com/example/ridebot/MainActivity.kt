@@ -48,18 +48,17 @@ val InputBg = Color(0xFF242926)
 var ttsEngine: TextToSpeech? = null
 
 fun speakFareSummary(context: Context, minFare: Int, maxFare: Int) {
+    val speechText = "Bot $minFare rupaye se lekar $maxFare rupaye tak ki saari rides accept karega, aur is range ke bahar ki rides reject ho jayengi."
     if (ttsEngine == null) {
         ttsEngine = TextToSpeech(context.applicationContext) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 ttsEngine?.language = Locale("hi", "IN")
-                val text = "${minFare} rupaye se kam ki ride automatically reject ho jayegi, ${maxFare} rupaye se zyada ki ride accept ho jayegi, aur ${minFare} ya ${maxFare} rupaye ke beech ki ride par bot kuch nahi karega."
-                ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
+                ttsEngine?.speak(speechText, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
             }
         }
     } else {
         ttsEngine?.language = Locale("hi", "IN")
-        val text = "${minFare} rupaye se kam ki ride automatically reject ho jayegi, ${maxFare} rupaye se zyada ki ride accept ho jayegi, aur ${minFare} ya ${maxFare} rupaye ke beech ki ride par bot kuch nahi karega."
-        ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
+        ttsEngine?.speak(speechText, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
     }
 }
 
@@ -257,8 +256,8 @@ fun AutoSetupScreen() {
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
-    var rejectBelow by remember { mutableStateOf(RideAccessibilityService.rejectBelowFare.toInt()) }
-    var acceptAbove by remember { mutableStateOf(RideAccessibilityService.acceptAboveFare.toInt()) }
+    var minFare by remember { mutableIntStateOf(RideAccessibilityService.minTargetFare.toInt()) }
+    var maxFare by remember { mutableIntStateOf(RideAccessibilityService.maxTargetFare.toInt()) }
 
     var showDialogFor by remember { mutableStateOf<String?>(null) }
     var tempFareText by remember { mutableStateOf("") }
@@ -275,7 +274,7 @@ fun SettingsScreen() {
 
     if (showDialogFor != null) {
         val isMin = showDialogFor == "min"
-        val title = if (isMin) "Min Fare (Reject Below)" else "Max Fare (Accept Above)"
+        val title = if (isMin) "Minimum Fare Limit" else "Maximum Fare Limit"
 
         AlertDialog(
             onDismissRequest = { showDialogFor = null },
@@ -317,15 +316,15 @@ fun SettingsScreen() {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val value = tempFareText.toIntOrNull() ?: 0
+                        val value = tempFareText.toIntOrNull() ?: 1
                         if (isMin) {
-                            rejectBelow = value
-                            RideAccessibilityService.rejectBelowFare = value.toDouble()
+                            minFare = value
+                            RideAccessibilityService.minTargetFare = value.toDouble()
                         } else {
-                            acceptAbove = value
-                            RideAccessibilityService.acceptAboveFare = value.toDouble()
+                            maxFare = value
+                            RideAccessibilityService.maxTargetFare = value.toDouble()
                         }
-                        speakFareSummary(context, rejectBelow, acceptAbove)
+                        speakFareSummary(context, minFare, maxFare)
                         showDialogFor = null
                     }
                 ) {
@@ -352,8 +351,8 @@ fun SettingsScreen() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("₹ Fare Controls", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            IconButton(onClick = { speakFareSummary(context, rejectBelow, acceptAbove) }) {
+            Text("₹ Target Fare Range", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            IconButton(onClick = { speakFareSummary(context, minFare, maxFare) }) {
                 Icon(Icons.Default.VolumeUp, contentDescription = "Speak Fare Rules", tint = PrimaryGreen)
             }
         }
@@ -365,16 +364,16 @@ fun SettingsScreen() {
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { speakFareSummary(context, rejectBelow, acceptAbove) }
+                .clickable { speakFareSummary(context, minFare, maxFare) }
         ) {
             Row(
                 modifier = Modifier.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Info, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    "Reject below ₹$rejectBelow, accept above ₹$acceptAbove",
+                    "Accepts ₹$minFare se ₹$maxFare tak ki rides (Baki reject)",
                     color = PrimaryGreen,
                     fontSize = 13.sp
                 )
@@ -389,11 +388,11 @@ fun SettingsScreen() {
         ) {
             Card(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF261818)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF14261B)),
                 modifier = Modifier
                     .weight(1f)
                     .clickable {
-                        tempFareText = rejectBelow.toString()
+                        tempFareText = minFare.toString()
                         showDialogFor = "min"
                     }
             ) {
@@ -403,9 +402,9 @@ fun SettingsScreen() {
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Min Fare (Reject)", color = AlertRed, fontSize = 12.sp)
+                    Text("Min Fare (Starting)", color = PrimaryGreen, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text("₹$rejectBelow", color = AlertRed, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Text("₹$minFare", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("Tap to edit", color = TextGray, fontSize = 10.sp)
                 }
@@ -417,7 +416,7 @@ fun SettingsScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .clickable {
-                        tempFareText = acceptAbove.toString()
+                        tempFareText = maxFare.toString()
                         showDialogFor = "max"
                     }
             ) {
@@ -427,9 +426,9 @@ fun SettingsScreen() {
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Max Fare (Accept)", color = PrimaryGreen, fontSize = 12.sp)
+                    Text("Max Fare (Limit)", color = PrimaryGreen, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text("₹$acceptAbove", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Text("₹$maxFare", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("Tap to edit", color = TextGray, fontSize = 10.sp)
                 }
