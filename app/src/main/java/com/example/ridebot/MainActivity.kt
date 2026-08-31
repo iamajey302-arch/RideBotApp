@@ -7,11 +7,13 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
+import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -34,13 +36,17 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.*
 import com.example.ridebot.bot.FloatingWidgetService
 import com.example.ridebot.bot.RideAccessibilityService
+import com.example.ridebot.bot.RideLogItem
+import com.example.ridebot.bot.RideStatus
 import java.util.*
 
 val BgDark = Color(0xFF0D0F0E)
 val CardDark = Color(0xFF1B1E1C)
 val CardBorder = Color(0xFF2B332E)
 val PrimaryGreen = Color(0xFF00E676)
+val InfoBlue = Color(0xFF29B6F6)
 val AlertRed = Color(0xFFFF5252)
+val WarningOrange = Color(0xFFFF9100)
 val WarningYellow = Color(0xFFFFD600)
 val TextGray = Color(0xFF888888)
 val InputBg = Color(0xFF242926)
@@ -63,9 +69,9 @@ fun speakFareSummary(context: Context, minFare: Int, maxFare: Int) {
 }
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        checkOverlayPermission()
 
         ttsEngine = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -75,6 +81,46 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val navController = rememberNavController()
+            var showAccessibilityPrompt by remember { mutableStateOf(!isAccessibilityServiceEnabled()) }
+
+            LaunchedEffect(Unit) {
+                checkOverlayPermission()
+            }
+
+            if (showAccessibilityPrompt) {
+                AlertDialog(
+                    onDismissRequest = { },
+                    containerColor = Color(0xFF1B1E1C),
+                    shape = RoundedCornerShape(20.dp),
+                    title = {
+                        Text(
+                            text = "⚠️ Accessibility Permission Required",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "RideBot ko background me Rapido aur Uber rides detect karne ke liye Accessibility Permission zaroori hai.\n\nKripya 'Downloaded Apps' me jakar RideBot ko ON karein.",
+                            color = Color.LightGray,
+                            fontSize = 14.sp
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                openAccessibilitySettings()
+                                showAccessibilityPrompt = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen)
+                        ) {
+                            Text("Enable Now", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                )
+            }
+
             Scaffold(
                 bottomBar = {
                     NavigationBar(containerColor = Color(0xFF141715)) {
@@ -129,10 +175,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        ttsEngine?.stop()
-        ttsEngine?.shutdown()
-        super.onDestroy()
+    override fun onResume() {
+        super.onResume()
+        checkOverlayPermission()
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedServiceName = "$packageName/${RideAccessibilityService::class.java.canonicalName}"
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val colonSplitter = TextUtils.SimpleStringSplitter(':')
+        colonSplitter.setString(enabledServices)
+        while (colonSplitter.hasNext()) {
+            val componentName = colonSplitter.next()
+            if (componentName.equals(expectedServiceName, ignoreCase = true) ||
+                componentName.contains(packageName, ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        startActivity(intent)
     }
 
     private fun checkOverlayPermission() {
@@ -146,11 +215,18 @@ class MainActivity : ComponentActivity() {
             startService(Intent(this, FloatingWidgetService::class.java))
         }
     }
+
+    override fun onDestroy() {
+        ttsEngine?.stop()
+        ttsEngine?.shutdown()
+        super.onDestroy()
+    }
 }
 
 @Composable
 fun AutoSetupScreen() {
     val context = LocalContext.current
+
     var devMode by remember { mutableStateOf(true) }
     var antiBot by remember { mutableStateOf(RideAccessibilityService.isAntiBotEnabled) }
     var silenceApps by remember { mutableStateOf(false) }
@@ -187,17 +263,19 @@ fun AutoSetupScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("⚙ Quick Setup", color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Connected", color = WarningYellow, fontSize = 12.sp)
+                        Text("Status", color = WarningYellow, fontSize = 12.sp)
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
-                        StatusIndicator("Accessibility", true)
-                        StatusIndicator("Overlay", true)
-                        StatusIndicator("Battery", true)
-                        StatusIndicator("Float Icon", floatWidgetEnabled)
+                        StatusIndicator("Accessibility", true) {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                        StatusIndicator("Overlay", true) {}
+                        StatusIndicator("Battery", true) {}
+                        StatusIndicator("Float Icon", floatWidgetEnabled) {}
                     }
                 }
             }
@@ -345,7 +423,6 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        // --- FARE CONTROLS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -437,7 +514,6 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- AREA FILTERS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -620,7 +696,6 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- PLATFORMS ---
         Text("🛵 SUPPORTED PLATFORMS", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -643,8 +718,195 @@ fun SettingsScreen() {
 }
 
 @Composable
-fun StatusIndicator(label: String, active: Boolean) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+fun LogsScreen() {
+    val logs = RideAccessibilityService.rideLogs
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "📋 Ride Activity Logs",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            if (logs.isNotEmpty()) {
+                TextButton(onClick = { logs.clear() }) {
+                    Text("Clear All", color = AlertRed, fontSize = 13.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (logs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.ListAlt,
+                        contentDescription = null,
+                        tint = TextGray,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No Rides Processed Yet", color = TextGray, fontSize = 15.sp)
+                    Text("All auto, manual, rejected and missed rides will show here", color = Color(0xFF555555), fontSize = 12.sp)
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(logs, key = { it.id }) { item ->
+                    val statusColor = when (item.status) {
+                        RideStatus.AUTO_ACCEPTED -> PrimaryGreen
+                        RideStatus.MANUAL_ACCEPTED -> InfoBlue
+                        RideStatus.REJECTED -> AlertRed
+                        RideStatus.MISSED -> WarningOrange
+                    }
+
+                    val statusBg = when (item.status) {
+                        RideStatus.AUTO_ACCEPTED -> Color(0xFF14261B)
+                        RideStatus.MANUAL_ACCEPTED -> Color(0xFF14222B)
+                        RideStatus.REJECTED -> Color(0xFF261818)
+                        RideStatus.MISSED -> Color(0xFF2B2114)
+                    }
+
+                    val statusText = when (item.status) {
+                        RideStatus.AUTO_ACCEPTED -> "AUTO ACCEPTED"
+                        RideStatus.MANUAL_ACCEPTED -> "MANUAL ACCEPTED"
+                        RideStatus.REJECTED -> "REJECTED"
+                        RideStatus.MISSED -> "MISSED / TIMEOUT"
+                    }
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = statusBg),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        when (item.status) {
+                                            RideStatus.AUTO_ACCEPTED, RideStatus.MANUAL_ACCEPTED -> Icons.Default.CheckCircle
+                                            RideStatus.REJECTED -> Icons.Default.Cancel
+                                            RideStatus.MISSED -> Icons.Default.AccessTime
+                                        },
+                                        contentDescription = null,
+                                        tint = statusColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = item.appName,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = item.timestamp,
+                                        color = TextGray,
+                                        fontSize = 11.sp
+                                    )
+                                }
+
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = if (item.fare > 0) "₹${item.fare}" else "Offer",
+                                        color = statusColor,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.sp
+                                    )
+                                    Text(
+                                        text = statusText,
+                                        color = statusColor,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = Color(0xFF2B332E), thickness = 0.5.dp)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.TripOrigin, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Pickup (${item.pickupDist.ifEmpty { "Near" }}): ",
+                                        color = PrimaryGreen,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = item.pickupLocation.ifEmpty { "Location detected" },
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = AlertRed, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Drop (${item.dropDist.ifEmpty { "Distance" }}): ",
+                                        color = AlertRed,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = item.dropLocation.ifEmpty { "Location detected" },
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            if (item.note.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = item.note,
+                                    color = Color(0xFF888888),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusIndicator(label: String, active: Boolean, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable { onClick() }
+    ) {
         Icon(
             if (active) Icons.Default.CheckCircle else Icons.Default.Cancel,
             contentDescription = null,
@@ -686,12 +948,5 @@ fun ToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange
 fun HomeScreen() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text("⚡ RideBot Online & Running", color = PrimaryGreen, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-fun LogsScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("📋 No Logs Recorded", color = TextGray, fontSize = 15.sp)
     }
 }
