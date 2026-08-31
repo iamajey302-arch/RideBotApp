@@ -53,8 +53,8 @@ val InputBg = Color(0xFF242926)
 
 var ttsEngine: TextToSpeech? = null
 
-fun speakFareSummary(context: Context, minFare: Int, maxFare: Int) {
-    val speechText = "Bot $minFare rupaye se lekar $maxFare rupaye tak ki saari rides accept karega, aur is range ke bahar ki rides reject ho jayengi."
+fun speakFareSummary(context: Context, minFare: Int, maxFare: Int, maxPickup: Double) {
+    val speechText = "Bot $minFare rupaye se $maxFare rupaye tak aur $maxPickup kilometer tak ke pickup wali rides accept karega."
     if (ttsEngine == null) {
         ttsEngine = TextToSpeech(context.applicationContext) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
                     },
                     text = {
                         Text(
-                            text = "RideBot ko background me Rapido aur Uber rides detect karne ke liye Accessibility Permission zaroori hai.\n\nKripya 'Downloaded Apps' me jakar RideBot ko ON karein.",
+                            text = "RideBot ko Rapido aur Uber rides auto-accept karne ke liye Accessibility Permission zaroori hai.\n\nKripya 'Downloaded Apps' me jakar RideBot ko ON karein.",
                             color = Color.LightGray,
                             fontSize = 14.sp
                         )
@@ -336,6 +336,7 @@ fun SettingsScreen() {
     val context = LocalContext.current
     var minFare by remember { mutableIntStateOf(RideAccessibilityService.minTargetFare.toInt()) }
     var maxFare by remember { mutableIntStateOf(RideAccessibilityService.maxTargetFare.toInt()) }
+    var maxPickupKm by remember { mutableDoubleStateOf(RideAccessibilityService.maxPickupDistanceKm) }
 
     var showDialogFor by remember { mutableStateOf<String?>(null) }
     var tempFareText by remember { mutableStateOf("") }
@@ -402,7 +403,7 @@ fun SettingsScreen() {
                             maxFare = value
                             RideAccessibilityService.maxTargetFare = value.toDouble()
                         }
-                        speakFareSummary(context, minFare, maxFare)
+                        speakFareSummary(context, minFare, maxFare, maxPickupKm)
                         showDialogFor = null
                     }
                 ) {
@@ -423,13 +424,14 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        // --- FARE CONTROLS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("₹ Target Fare Range", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            IconButton(onClick = { speakFareSummary(context, minFare, maxFare) }) {
+            IconButton(onClick = { speakFareSummary(context, minFare, maxFare, maxPickupKm) }) {
                 Icon(Icons.Default.VolumeUp, contentDescription = "Speak Fare Rules", tint = PrimaryGreen)
             }
         }
@@ -441,7 +443,7 @@ fun SettingsScreen() {
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { speakFareSummary(context, minFare, maxFare) }
+                .clickable { speakFareSummary(context, minFare, maxFare, maxPickupKm) }
         ) {
             Row(
                 modifier = Modifier.padding(12.dp),
@@ -479,7 +481,7 @@ fun SettingsScreen() {
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Min Fare (Starting)", color = PrimaryGreen, fontSize = 12.sp)
+                    Text("Min Fare", color = PrimaryGreen, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(6.dp))
                     Text("₹$minFare", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -503,7 +505,7 @@ fun SettingsScreen() {
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Max Fare (Limit)", color = PrimaryGreen, fontSize = 12.sp)
+                    Text("Max Fare", color = PrimaryGreen, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(6.dp))
                     Text("₹$maxFare", color = PrimaryGreen, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -514,6 +516,99 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // --- 📍 PICKUP DISTANCE TAB (0 km to 5.0 km) ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Navigation, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Max Pickup Distance", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+            Text("${String.format("%.1f", maxPickupKm)} km", color = InfoBlue, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardDark),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Surface(
+                    color = Color(0xFF14222B),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Pickup ${String.format("%.1f", maxPickupKm)} km se kam hoga toh accept karega, zyada door hua toh reject.",
+                            color = InfoBlue,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Quick Pickup Preset Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(0.5, 1.0, 2.0, 3.0, 5.0).forEach { km ->
+                        val isSelected = (maxPickupKm == km)
+                        Button(
+                            onClick = {
+                                maxPickupKm = km
+                                RideAccessibilityService.maxPickupDistanceKm = km
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) InfoBlue else Color(0xFF191C1A),
+                                contentColor = if (isSelected) Color.Black else Color.LightGray
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("${km}k", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Slider from 0.2 km to 5.0 km
+                Slider(
+                    value = maxPickupKm.toFloat(),
+                    onValueChange = { newValue ->
+                        val rounded = (Math.round(newValue * 10.0) / 10.0)
+                        maxPickupKm = rounded
+                        RideAccessibilityService.maxPickupDistanceKm = rounded
+                    },
+                    valueRange = 0.2f..5.0f,
+                    steps = 23,
+                    colors = SliderDefaults.colors(
+                        thumbColor = InfoBlue,
+                        activeTrackColor = InfoBlue,
+                        inactiveTrackColor = Color(0xFF2B332E)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- AREA FILTERS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
