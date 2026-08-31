@@ -10,6 +10,29 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.runtime.mutableStateListOf
+import java.text.SimpleDateFormat
+import java.util.*
+
+enum class RideStatus {
+    AUTO_ACCEPTED,
+    MANUAL_ACCEPTED,
+    REJECTED,
+    MISSED
+}
+
+data class RideLogItem(
+    val id: String = UUID.randomUUID().toString(),
+    val appName: String,
+    val fare: Double,
+    val pickupDist: String = "",
+    val dropDist: String = "",
+    val pickupLocation: String = "",
+    val dropLocation: String = "",
+    val status: RideStatus,
+    val timestamp: String,
+    val note: String = ""
+)
 
 class RideAccessibilityService : AccessibilityService() {
 
@@ -19,6 +42,35 @@ class RideAccessibilityService : AccessibilityService() {
         var isAntiBotEnabled = true
         var minTargetFare: Double = 1.0
         var maxTargetFare: Double = 2000.0
+
+        val rideLogs = mutableStateListOf<RideLogItem>()
+
+        fun addLog(
+            appName: String,
+            fare: Double,
+            pickupDist: String,
+            dropDist: String,
+            pickupLoc: String,
+            dropLoc: String,
+            status: RideStatus,
+            note: String = ""
+        ) {
+            val time = SimpleDateFormat("hh:mm:ss a", Locale.getDefault()).format(Date())
+            rideLogs.add(
+                0,
+                RideLogItem(
+                    appName = appName,
+                    fare = fare,
+                    pickupDist = pickupDist,
+                    dropDist = dropDist,
+                    pickupLocation = pickupLoc,
+                    dropLocation = dropLoc,
+                    status = status,
+                    timestamp = time,
+                    note = note
+                )
+            )
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -26,27 +78,46 @@ class RideAccessibilityService : AccessibilityService() {
     private var screenWidth = 1080
     private var screenHeight = 2400
 
+    private var currentTrackingOffer: ActiveOfferTracker? = null
+
+    private data class ActiveOfferTracker(
+        val appName: String,
+        val fare: Double,
+        val pickupDist: String,
+        val dropDist: String,
+        val pickupLoc: String,
+        val dropLoc: String,
+        var isHandled: Boolean = false
+    )
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         val metrics: DisplayMetrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
-        Log.d(TAG, "Service Ready: $screenWidth x $screenHeight")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!isBotRunning || event == null) return
+        if (event == null) return
+
+        val pkgName = event.packageName?.toString() ?: ""
+        val appDetected = when {
+            pkgName.contains("rapido", ignoreCase = true) -> "Rapido"
+            pkgName.contains("uber", ignoreCase = true) -> "Uber Driver"
+            pkgName.contains("ola", ignoreCase = true) -> "Ola Partner"
+            pkgName.contains("porter", ignoreCase = true) -> "Porter"
+            else -> ""
+        }
+
+        if (appDetected.isEmpty()) return
 
         val allNodes = ArrayList<AccessibilityNodeInfo>()
-
-        // 1. Gather all nodes from windows and active root
         val windowList = windows
         if (!windowList.isNullOrEmpty()) {
             for (window in windowList) {
                 window.root?.let { collectAllNodes(it, allNodes) }
             }
         }
-
         if (allNodes.isEmpty()) {
             rootInActiveWindow?.let { collectAllNodes(it, allNodes) }
         }
@@ -54,34 +125,145 @@ class RideAccessibilityService : AccessibilityService() {
 
         if (allNodes.isEmpty()) return
 
-        // 2. Identify Action Buttons
         val actionButton = findActionTarget(allNodes)
 
+        // 1. Offer Screen Currently Active
         if (actionButton != null) {
-            val detectedFare = parseFareFromScreen(allNodes)
-            Log.d(TAG, "Offer Detected! Fare: ₹$detectedFare | Button: ${actionButton.text}")
+            val detectedFare = parseFareFromScreen(allNodes) ?: 0.0
+            val rideDetails = parseRideDetails(allNodes)
 
-            if (detectedFare != null) {
-                // 🟢 IN RANGE -> ACCEPT (Rapido: Accept, Uber: Confirm)
-                if (detectedFare in minTargetFare..maxTargetFare) {
-                    Log.d(TAG, "Fare ₹$detectedFare in target range. ACCEPTING...")
+            if (currentTrackingOffer == null) {
+                currentTrackingOffer = ActiveOfferTracker(
+                    appName = appDetected,
+                    fare = detectedFare,
+                    pickupDist = rideDetails.pickupDist,
+                    dropDist = rideDetails.dropDist,
+                    pickupLoc = rideDetails.pickupLoc,
+                    dropLoc = rideDetails.dropLoc
+                )
+
+                // 15 seconds timeout to mark as MISSED if no click happened
+                handler.postDelayed({
+                    currentTrackingOffer?.let { offer ->
+                        if (!offer.isHandled) {
+                            addLog(
+                                appName = offer.appName,
+                                fare = offer.fare,
+                                pickupDist = offer.pickupDist,
+                                dropDist = offer.dropDist,
+                                pickupLoc = offer.pickupLoc,
+                                dropLoc = offer.dropLoc,
+                                status = RideStatus.MISSED,
+                                note = "Timer expired (Missed order)"
+                            )
+                            currentTrackingOffer = null
+                        }
+                    }
+                }, 16000)
+            }
+
+            // 2. If BOT is ON -> Execute Auto Flow
+            if (isBotRunning) {
+                if (detectedFare in minTargetFare..maxTargetFare || (detectedFare == 0.0 && minTargetFare <= 10.0)) {
+                    currentTrackingOffer?.isHandled = true
                     performClickAction(actionButton)
+                    addLog(
+                        appName = appDetected,
+                        fare = detectedFare,
+                        pickupDist = rideDetails.pickupDist,
+                        dropDist = rideDetails.dropDist,
+                        pickupLoc = rideDetails.pickupLoc,
+                        dropLoc = rideDetails.dropLoc,
+                        status = RideStatus.AUTO_ACCEPTED,
+                        note = "Auto accepted by bot"
+                    )
+                    currentTrackingOffer = null
                     return
-                }
-
-                // 🔴 OUT OF RANGE -> REJECT (Rapido: ➖ minus, Uber: ✕ cross)
-                if (detectedFare < minTargetFare || detectedFare > maxTargetFare) {
-                    Log.d(TAG, "Fare ₹$detectedFare outside range. REJECTING...")
+                } else if (detectedFare < minTargetFare || detectedFare > maxTargetFare) {
+                    currentTrackingOffer?.isHandled = true
                     executeRejectAction(allNodes, actionButton)
+                    addLog(
+                        appName = appDetected,
+                        fare = detectedFare,
+                        pickupDist = rideDetails.pickupDist,
+                        dropDist = rideDetails.dropDist,
+                        pickupLoc = rideDetails.pickupLoc,
+                        dropLoc = rideDetails.dropLoc,
+                        status = RideStatus.REJECTED,
+                        note = "Auto rejected (Out of range)"
+                    )
+                    currentTrackingOffer = null
                     return
-                }
-            } else {
-                // Fallback: If fare is not parsed and user wants all rides (min <= 10)
-                if (minTargetFare <= 10.0) {
-                    performClickAction(actionButton)
                 }
             }
         }
+
+        // 3. User manual interaction check when screen changes or user taps
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && currentTrackingOffer != null && !currentTrackingOffer!!.isHandled) {
+            val clickedText = (event.text?.joinToString(" ") ?: "").lowercase()
+            if (clickedText.contains("accept") || clickedText.contains("confirm") || !isBotRunning) {
+                currentTrackingOffer?.let { offer ->
+                    offer.isHandled = true
+                    addLog(
+                        appName = offer.appName,
+                        fare = offer.fare,
+                        pickupDist = offer.pickupDist,
+                        dropDist = offer.dropDist,
+                        pickupLoc = offer.pickupLoc,
+                        dropLoc = offer.dropLoc,
+                        status = RideStatus.MANUAL_ACCEPTED,
+                        note = "Manually accepted by driver"
+                    )
+                }
+                currentTrackingOffer = null
+            }
+        }
+    }
+
+    private data class ParsedDetails(
+        val pickupDist: String = "",
+        val dropDist: String = "",
+        val pickupLoc: String = "",
+        val dropLoc: String = ""
+    )
+
+    private fun parseRideDetails(nodes: List<AccessibilityNodeInfo>): ParsedDetails {
+        val rawTexts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        val distances = mutableListOf<String>()
+        val addressList = mutableListOf<String>()
+
+        for (t in rawTexts) {
+            val distRegex = Regex("""(\d+(\.\d+)?\s*km)""", RegexOption.IGNORE_CASE)
+            val match = distRegex.find(t)
+            if (match != null) {
+                distances.add(match.groupValues[1])
+            }
+
+            if ((t.contains("Delhi", ignoreCase = true) ||
+                 t.contains("Nagar", ignoreCase = true) ||
+                 t.contains("Bagh", ignoreCase = true) ||
+                 t.contains("Road", ignoreCase = true) ||
+                 t.contains("Sector", ignoreCase = true) ||
+                 t.contains("Gali", ignoreCase = true) ||
+                 t.contains("Block", ignoreCase = true)) &&
+                !t.contains("₹") && !t.contains("min", ignoreCase = true)
+            ) {
+                if (!addressList.contains(t)) {
+                    addressList.add(t)
+                }
+            }
+        }
+
+        val pickupD = if (distances.isNotEmpty()) distances[0] else ""
+        val dropD = if (distances.size > 1) distances[1] else if (distances.isNotEmpty()) distances[0] else ""
+
+        val pickupL = if (addressList.isNotEmpty()) addressList[0] else "Pickup Location"
+        val dropL = if (addressList.size > 1) addressList[1] else if (addressList.isNotEmpty()) addressList[0] else "Drop Location"
+
+        return ParsedDetails(pickupDist = pickupD, dropDist = dropD, pickupLoc = pickupL, dropLoc = dropL)
     }
 
     private fun collectAllNodes(node: AccessibilityNodeInfo?, list: ArrayList<AccessibilityNodeInfo>) {
@@ -100,7 +282,6 @@ class RideAccessibilityService : AccessibilityService() {
         val texts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
             .filter { it.isNotBlank() }
 
-        // Primary: Match main fare symbols ignoring hourly rates (/hr, est) & premiums
         for (t in texts) {
             val clean = t.trim()
             if ((clean.contains("₹") || clean.contains("Rs", ignoreCase = true) || clean.contains("INR", ignoreCase = true)) &&
@@ -117,7 +298,6 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Secondary: Plain numerical fare
         for (t in texts) {
             val clean = t.trim()
             if (!clean.contains("km", ignoreCase = true) && !clean.contains("min", ignoreCase = true)) {
@@ -158,7 +338,6 @@ class RideAccessibilityService : AccessibilityService() {
     }
 
     private fun executeRejectAction(nodes: List<AccessibilityNodeInfo>, actionBtn: AccessibilityNodeInfo) {
-        // 1. Direct Node Check for Reject, Cross (✕), Minus (➖), Dismiss
         for (node in nodes) {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
             val viewId = (node.viewIdResourceName ?: "").lowercase()
@@ -182,21 +361,17 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. Rapido Geometry Fallback: Tap the circular ➖ button located to the left of the Accept button
         val rect = Rect()
         actionBtn.getBoundsInScreen(rect)
         if (rect.left > 120) {
             val minusX = (rect.left - 80).toFloat()
             val minusY = rect.centerY().toFloat()
-            Log.d(TAG, "Executing Rapido minus coordinate tap at ($minusX, $minusY)")
             clickDirectCoordinate(minusX, minusY, null)
             return
         }
 
-        // 3. Uber Geometry Fallback: Tap top-right ✕ area of bottom sheet
         val crossX = screenWidth * 0.85f
         val crossY = screenHeight * 0.42f
-        Log.d(TAG, "Executing Uber cross coordinate tap at ($crossX, $crossY)")
         clickDirectCoordinate(crossX, crossY, null)
     }
 
@@ -214,7 +389,6 @@ class RideAccessibilityService : AccessibilityService() {
         val delay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (30L..80L).random() else 10L
 
         handler.postDelayed({
-            // Touch gesture tap at exact pixel coordinate
             val path = Path().apply {
                 moveTo(x, y)
             }
@@ -223,7 +397,6 @@ class RideAccessibilityService : AccessibilityService() {
                 .build()
             dispatchGesture(gesture, null, null)
 
-            // Direct node click trigger
             node?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             node?.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }, delay)
