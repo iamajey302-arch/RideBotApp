@@ -1,15 +1,19 @@
 package com.example.ridebot
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,12 +26,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.*
+import com.example.ridebot.bot.FloatingWidgetService
 import com.example.ridebot.bot.RideAccessibilityService
+import java.util.*
 
 val BgDark = Color(0xFF0D0F0E)
 val CardDark = Color(0xFF1B1E1C)
@@ -36,11 +43,36 @@ val PrimaryGreen = Color(0xFF00E676)
 val AlertRed = Color(0xFFFF5252)
 val WarningYellow = Color(0xFFFFD600)
 val TextGray = Color(0xFF888888)
+val InputBg = Color(0xFF242926)
+
+var ttsEngine: TextToSpeech? = null
+
+fun speakFareSummary(context: Context, minFare: Int, maxFare: Int) {
+    if (ttsEngine == null) {
+        ttsEngine = TextToSpeech(context.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                ttsEngine?.language = Locale("hi", "IN")
+                val text = "${minFare} rupaye se kam ki ride automatically reject ho jayegi, ${maxFare} rupaye se zyada ki ride accept ho jayegi, aur ${minFare} ya ${maxFare} rupaye ke beech ki ride par bot kuch nahi karega."
+                ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
+            }
+        }
+    } else {
+        ttsEngine?.language = Locale("hi", "IN")
+        val text = "${minFare} rupaye se kam ki ride automatically reject ho jayegi, ${maxFare} rupaye se zyada ki ride accept ho jayegi, aur ${minFare} ya ${maxFare} rupaye ke beech ki ride par bot kuch nahi karega."
+        ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FareAudio")
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkOverlayPermission()
+
+        ttsEngine = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                ttsEngine?.language = Locale("hi", "IN")
+            }
+        }
 
         setContent {
             val navController = rememberNavController()
@@ -98,6 +130,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        ttsEngine?.stop()
+        ttsEngine?.shutdown()
+        super.onDestroy()
+    }
+
     private fun checkOverlayPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
             val intent = Intent(
@@ -105,17 +143,21 @@ class MainActivity : ComponentActivity() {
                 Uri.parse("package:$packageName")
             )
             startActivity(intent)
+        } else {
+            startService(Intent(this, FloatingWidgetService::class.java))
         }
     }
 }
 
 @Composable
 fun AutoSetupScreen() {
+    val context = LocalContext.current
     var devMode by remember { mutableStateOf(true) }
     var antiBot by remember { mutableStateOf(RideAccessibilityService.isAntiBotEnabled) }
     var silenceApps by remember { mutableStateOf(false) }
     var fastMode by remember { mutableStateOf(RideAccessibilityService.isFastTurboMode) }
     var botActive by remember { mutableStateOf(RideAccessibilityService.isBotRunning) }
+    var floatWidgetEnabled by remember { mutableStateOf(true) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -153,10 +195,10 @@ fun AutoSetupScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
-                        StatusIndicator("Shizuku", true)
                         StatusIndicator("Accessibility", true)
                         StatusIndicator("Overlay", true)
                         StatusIndicator("Battery", true)
+                        StatusIndicator("Float Icon", floatWidgetEnabled)
                     }
                 }
             }
@@ -169,6 +211,15 @@ fun AutoSetupScreen() {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    ToggleRow("Floating Widget", "Show draggable floating power button", floatWidgetEnabled) {
+                        floatWidgetEnabled = it
+                        if (it) {
+                            context.startService(Intent(context, FloatingWidgetService::class.java))
+                        } else {
+                            context.stopService(Intent(context, FloatingWidgetService::class.java))
+                        }
+                    }
+                    HorizontalDivider(color = CardBorder, thickness = 0.5.dp)
                     ToggleRow("Fast Accept (Turbo 0ms)", "Ultra fast click speed", fastMode) {
                         fastMode = it
                         RideAccessibilityService.isFastTurboMode = it
@@ -205,21 +256,26 @@ fun AutoSetupScreen() {
 
 @Composable
 fun SettingsScreen() {
+    val context = LocalContext.current
     var rejectBelow by remember { mutableStateOf(RideAccessibilityService.rejectBelowFare.toInt()) }
     var acceptAbove by remember { mutableStateOf(RideAccessibilityService.acceptAboveFare.toInt()) }
 
-    var showDialogFor by remember { mutableStateOf<String?>(null) } // "min" or "max"
+    var showDialogFor by remember { mutableStateOf<String?>(null) }
     var tempFareText by remember { mutableStateOf("") }
 
-    var rapidoEnabled by remember { mutableStateOf(true) }
-    var uberEnabled by remember { mutableStateOf(true) }
-    var olaEnabled by remember { mutableStateOf(true) }
-    var porterEnabled by remember { mutableStateOf(true) }
+    var isIncludeMode by remember { mutableStateOf(true) }
+    var customAreaText by remember { mutableStateOf("") }
+    val selectedAreas = remember { mutableStateListOf<String>() }
 
-    // Number Input Popup Dialog
+    val quickAddList = listOf(
+        "Delhi", "New Delhi", "Noida", "Greater Noida",
+        "Gurgaon", "Gurugram", "Ghaziabad", "Faridabad",
+        "Narela", "Sonipat", "Manesar", "Airport"
+    )
+
     if (showDialogFor != null) {
         val isMin = showDialogFor == "min"
-        val title = if (isMin) "Min Fare" else "Max Fare"
+        val title = if (isMin) "Min Fare (Reject Below)" else "Max Fare (Accept Above)"
 
         AlertDialog(
             onDismissRequest = { showDialogFor = null },
@@ -269,6 +325,7 @@ fun SettingsScreen() {
                             acceptAbove = value
                             RideAccessibilityService.acceptAboveFare = value.toDouble()
                         }
+                        speakFareSummary(context, rejectBelow, acceptAbove)
                         showDialogFor = null
                     }
                 ) {
@@ -289,22 +346,26 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        // --- FARE CONTROLS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("₹ Fare Controls", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = PrimaryGreen)
+            IconButton(onClick = { speakFareSummary(context, rejectBelow, acceptAbove) }) {
+                Icon(Icons.Default.VolumeUp, contentDescription = "Speak Fare Rules", tint = PrimaryGreen)
+            }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Info Banner
         Surface(
             color = Color(0xFF14241B),
             shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { speakFareSummary(context, rejectBelow, acceptAbove) }
         ) {
             Row(
                 modifier = Modifier.padding(12.dp),
@@ -320,14 +381,12 @@ fun SettingsScreen() {
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Interactive Clickable Fare Cards
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Min Fare (Reject) Card
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF261818)),
@@ -352,7 +411,6 @@ fun SettingsScreen() {
                 }
             }
 
-            // Max Fare (Accept) Card
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF14261B)),
@@ -380,6 +438,190 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // --- AREA FILTERS ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.LocationOn, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Area Filters", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardDark),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Surface(
+                    color = Color(0xFF14241B),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (isIncludeMode) "Include areas accept karega, baki ignore." else "Exclude areas reject karega.",
+                            color = PrimaryGreen,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { isIncludeMode = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isIncludeMode) Color(0xFF1A3324) else Color(0xFF191C1A),
+                            contentColor = if (isIncludeMode) PrimaryGreen else TextGray
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Include", fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = { isIncludeMode = false },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (!isIncludeMode) Color(0xFF331A1A) else Color(0xFF191C1A),
+                            contentColor = if (!isIncludeMode) AlertRed else TextGray
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Exclude", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = customAreaText,
+                        onValueChange = { customAreaText = it },
+                        placeholder = { Text("Type area name...", color = TextGray, fontSize = 14.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = InputBg,
+                            unfocusedContainerColor = InputBg,
+                            focusedBorderColor = PrimaryGreen,
+                            unfocusedBorderColor = CardBorder,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = {
+                            if (customAreaText.isNotBlank() && !selectedAreas.contains(customAreaText.trim())) {
+                                selectedAreas.add(customAreaText.trim())
+                                customAreaText = ""
+                            }
+                        },
+                        modifier = Modifier
+                            .size(52.dp)
+                            .background(Color(0xFF1E2B22), RoundedCornerShape(12.dp))
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Area", tint = PrimaryGreen)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (selectedAreas.isNotEmpty()) {
+                    Text("Added Areas (${selectedAreas.size}):", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(selectedAreas) { area ->
+                            Surface(
+                                color = if (isIncludeMode) Color(0xFF1A3324) else Color(0xFF331A1A),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.clickable { selectedAreas.remove(area) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(area, color = if (isIncludeMode) PrimaryGreen else AlertRed, fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = TextGray, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                } else {
+                    Text("No areas added yet", color = TextGray, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Text("⊕ Quick add", color = TextGray, fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val chunkedChips = quickAddList.chunked(3)
+                chunkedChips.forEach { rowChips ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        rowChips.forEach { chip ->
+                            Surface(
+                                color = Color(0xFF14241B),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        if (!selectedAreas.contains(chip)) {
+                                            selectedAreas.add(chip)
+                                        }
+                                    }
+                            ) {
+                                Text(
+                                    "+ $chip",
+                                    color = PrimaryGreen,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- PLATFORMS ---
         Text("🛵 SUPPORTED PLATFORMS", color = PrimaryGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -389,13 +631,13 @@ fun SettingsScreen() {
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                ToggleRow("Rapido Captain", "Auto take Rapido rides", rapidoEnabled) { rapidoEnabled = it }
+                ToggleRow("Rapido Captain", "Auto take Rapido rides", true) {}
                 HorizontalDivider(color = CardBorder, thickness = 0.5.dp)
-                ToggleRow("Uber Driver", "Auto take Uber trips", uberEnabled) { uberEnabled = it }
+                ToggleRow("Uber Driver", "Auto take Uber trips", true) {}
                 HorizontalDivider(color = CardBorder, thickness = 0.5.dp)
-                ToggleRow("Ola Partner", "Auto take Ola rides", olaEnabled) { olaEnabled = it }
+                ToggleRow("Ola Partner", "Auto take Ola rides", true) {}
                 HorizontalDivider(color = CardBorder, thickness = 0.5.dp)
-                ToggleRow("Porter Partner", "Auto take Porter orders", porterEnabled) { porterEnabled = it }
+                ToggleRow("Porter Partner", "Auto take Porter orders", true) {}
             }
         }
     }
