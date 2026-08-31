@@ -10,6 +10,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 class RideAccessibilityService : AccessibilityService() {
 
@@ -17,15 +18,8 @@ class RideAccessibilityService : AccessibilityService() {
         var isBotRunning = true
         var isFastTurboMode = false
         var isAntiBotEnabled = true
-        var rejectBelowFare: Double = 50.0
-        var acceptAboveFare: Double = 60.0
-
-        val targetPackages = setOf(
-            "com.rapido.rider",
-            "com.ubercab.driver",
-            "com.olacabs.partner",
-            "com.theporter.partner"
-        )
+        var minTargetFare: Double = 1.0
+        var maxTargetFare: Double = 2000.0
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -38,60 +32,54 @@ class RideAccessibilityService : AccessibilityService() {
         val metrics: DisplayMetrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
+        Log.d(TAG, "Service Connected. Screen Size: $screenWidth x $screenHeight")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isBotRunning || event == null) return
 
-        val pkgName = event.packageName?.toString() ?: ""
-
-        if (targetPackages.any { pkgName.contains(it, ignoreCase = true) } ||
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-
-            val rootNode = rootInActiveWindow ?: return
-            processScreen(rootNode)
-        }
-    }
-
-    private fun processScreen(root: AccessibilityNodeInfo) {
         val allNodes = ArrayList<AccessibilityNodeInfo>()
-        collectAllNodes(root, allNodes)
 
-        // 1. Scan Fare strictly from all screen elements
-        var detectedFare: Double? = null
-        for (node in allNodes) {
-            val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
-            val fare = extractStrictFare(text)
-            if (fare != null && fare > 0) {
-                detectedFare = fare
-                break
+        // 1. Scan across all interactive windows
+        val windowList = windows
+        if (!windowList.isNullOrEmpty()) {
+            for (window in windowList) {
+                window.root?.let { collectAllNodes(it, allNodes) }
             }
         }
 
-        // 2. Strict Decision Making
-        if (detectedFare != null) {
-            Log.d(TAG, "Screen Fare Detected: ₹$detectedFare | Accept Limit: ₹$acceptAboveFare | Reject Limit: ₹$rejectBelowFare")
+        // Fallback root
+        if (allNodes.isEmpty()) {
+            rootInActiveWindow?.let { collectAllNodes(it, allNodes) }
+        }
+        event.source?.let { collectAllNodes(it, allNodes) }
 
-            // 🔴 Agar Fare Minimum Reject limit se kam hai -> Reject
-            if (detectedFare < rejectBelowFare) {
-                Log.d(TAG, "Fare ₹$detectedFare is strictly LOWER than ₹$rejectBelowFare -> REJECTING")
-                executeRejectFlow(allNodes)
-                return
+        if (allNodes.isEmpty()) return
+
+        // 2. Scan Screen Text & Fare
+        val detectedFare = parseFareFromScreen(allNodes)
+
+        // 3. Scan Accept Button
+        val acceptBtn = findAcceptTarget(allNodes)
+
+        if (acceptBtn != null) {
+            Log.d(TAG, "Ride Detected! Screen Fare: ₹$detectedFare | Target: ₹$minTargetFare - ₹$maxTargetFare")
+
+            if (detectedFare != null) {
+                if (detectedFare in minTargetFare..maxTargetFare) {
+                    Log.d(TAG, "Fare within range. Triggering ACCEPT!")
+                    performClickAction(acceptBtn)
+                    return
+                } else {
+                    Log.d(TAG, "Fare out of range. Triggering REJECT!")
+                    performRejectAction(allNodes)
+                    return
+                }
+            } else {
+                // Agar Fare screen par parse na ho sake, tab bhi active bot accept karega
+                Log.d(TAG, "Fare text generic. Executing Accept.")
+                performClickAction(acceptBtn)
             }
-
-            // 🟢 Agar Fare Accept limit se zyada ya barabar hai -> Accept
-            if (detectedFare >= acceptAboveFare) {
-                Log.d(TAG, "Fare ₹$detectedFare is EQUAL/HIGHER than ₹$acceptAboveFare -> ACCEPTING")
-                executeAcceptFlow(allNodes)
-                return
-            }
-
-            // 🟡 Agar Beech ka Fare hai -> Ignore (Do nothing)
-            Log.d(TAG, "Fare ₹$detectedFare is between limits. No action taken.")
-        } else {
-            // STRICT SAFETY: Agar Fare detect NAHI hua, toh blind click bilkul NAHI karenge
-            Log.d(TAG, "No valid fare symbol detected on screen. Skipping auto-accept for safety.")
         }
     }
 
@@ -107,38 +95,78 @@ class RideAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun extractStrictFare(text: String): Double? {
-        if (text.isBlank()) return null
+    private fun parseFareFromScreen(nodes: List<AccessibilityNodeInfo>): Double? {
+        val texts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
+            .filter { it.isNotBlank() }
 
-        // Ignore distance (km, m) and rating / timings
-        if (text.contains("km", ignoreCase = true) || text.contains("mins", ignoreCase = true) || text.contains("min", ignoreCase = true)) {
-            // Agar string me sirf distance hai toh ignore karein
-            if (!text.contains("₹") && !text.contains("Rs", ignoreCase = true)) return null
+        // Method A: Check single string with currency
+        for (t in texts) {
+            val clean = t.trim()
+            if (clean.contains("₹") || clean.contains("Rs", ignoreCase = true) || clean.contains("INR", ignoreCase = true)) {
+                val num = clean.replace(Regex("""[^\d.]"""), "").toDoubleOrNull()
+                if (num != null && num in 10.0..5000.0) return num
+            }
         }
 
-        // Match ₹120, ₹ 120, Rs. 120, 120 ₹, etc.
-        val regexWithSymbol = Regex("""(?:₹|Rs\.?|INR)\s*(\d+(?:,\d+)*(?:\.\d+)?)""")
-        val match = regexWithSymbol.find(text)
-        if (match != null) {
-            return match.groupValues[1].replace(",", "").toDoubleOrNull()
+        // Method B: Check adjacent nodes where "₹" is in one node and number in next
+        for (i in texts.indices) {
+            val t = texts[i].trim()
+            if (t == "₹" || t.equals("Rs", ignoreCase = true) || t.equals("Rs.", ignoreCase = true)) {
+                if (i + 1 < texts.size) {
+                    val nextNum = texts[i + 1].trim().replace(Regex("""[^\d.]"""), "").toDoubleOrNull()
+                    if (nextNum != null && nextNum in 10.0..5000.0) return nextNum
+                }
+            }
         }
 
-        // Alternative check: "120 ₹"
-        val regexSuffix = Regex("""(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:₹|Rs|INR)""")
-        val matchSuffix = regexSuffix.find(text)
-        if (matchSuffix != null) {
-            return matchSuffix.groupValues[1].replace(",", "").toDoubleOrNull()
+        // Method C: Any prominent standalone number between 20 and 3000
+        for (t in texts) {
+            val clean = t.trim()
+            if (!clean.contains("km", ignoreCase = true) && !clean.contains("min", ignoreCase = true) && !clean.contains("%")) {
+                if (clean.matches(Regex("""^\d+(\.\d{1,2})?$"""))) {
+                    val num = clean.toDoubleOrNull()
+                    if (num != null && num in 20.0..3000.0) return num
+                }
+            }
         }
 
         return null
     }
 
-    private fun executeRejectFlow(nodes: List<AccessibilityNodeInfo>) {
+    private fun findAcceptTarget(nodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
         for (node in nodes) {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
-            val viewId = node.viewIdResourceName?.lowercase() ?: ""
+            val viewId = (node.viewIdResourceName ?: "").lowercase()
 
-            val isRejectBtn = text.contains("reject") ||
+            val isAccept = text.contains("accept") ||
+                    text.contains("स्वीकार") ||
+                    text.contains("take ride") ||
+                    text.contains("order le") ||
+                    text.contains("book") ||
+                    text.contains("tap to accept") ||
+                    viewId.contains("accept") ||
+                    viewId.contains("confirm") ||
+                    viewId.contains("btn_accept") ||
+                    viewId.contains("slide")
+
+            if (isAccept) {
+                // Find clickable parent if child is non-clickable
+                var target = node
+                while (target.parent != null && !target.isClickable) {
+                    target = target.parent
+                }
+                return target
+            }
+        }
+        return null
+    }
+
+    private fun performRejectAction(nodes: List<AccessibilityNodeInfo>) {
+        for (node in nodes) {
+            val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
+            val viewId = (node.viewIdResourceName ?: "").lowercase()
+
+            val isReject = text.contains("reject") ||
                     text.contains("decline") ||
                     text.contains("dismiss") ||
                     text.contains("skip") ||
@@ -146,84 +174,57 @@ class RideAccessibilityService : AccessibilityService() {
                     text.contains("✕") ||
                     text.contains("x") ||
                     viewId.contains("reject") ||
-                    viewId.contains("cancel") ||
                     viewId.contains("close") ||
-                    viewId.contains("dismiss")
+                    viewId.contains("cross")
 
-            if (isRejectBtn) {
-                Log.d(TAG, "Direct Reject button found, clicking: $text")
-                triggerClick(node)
+            if (isReject) {
+                performClickAction(node)
                 return
             }
         }
 
-        // Swipe down & Back action fallback to clear the popup
-        swipeToDismiss()
-        handler.postDelayed({
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }, 150)
-    }
-
-    private fun executeAcceptFlow(nodes: List<AccessibilityNodeInfo>) {
-        for (node in nodes) {
-            val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
-            val viewId = node.viewIdResourceName?.lowercase() ?: ""
-
-            val isAcceptBtn = text.contains("accept") ||
-                    text.contains("स्वीकार") ||
-                    text.contains("take ride") ||
-                    text.contains("book") ||
-                    text.contains("order") ||
-                    viewId.contains("accept") ||
-                    viewId.contains("confirm")
-
-            if (isAcceptBtn) {
-                Log.d(TAG, "Accept button found, clicking: $text")
-                triggerClick(node)
-                break
-            }
-        }
-    }
-
-    private fun triggerClick(node: AccessibilityNodeInfo) {
-        val rect = Rect()
-        node.getBoundsInScreen(rect)
-
-        if (rect.centerX() <= 0 || rect.centerY() <= 0) {
-            if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            return
-        }
-
-        val clickDelay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (120L..280L).random() else 40L
-
-        handler.postDelayed({
-            val path = Path().apply {
-                moveTo(rect.centerX().toFloat(), rect.centerY().toFloat())
-            }
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 40))
-                .build()
-
-            dispatchGesture(gesture, null, null)
-            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        }, clickDelay)
-    }
-
-    private fun swipeToDismiss() {
+        // Dismiss Fallback
         val startX = screenWidth * 0.5f
-        val startY = screenHeight * 0.4f
+        val startY = screenHeight * 0.45f
         val endY = screenHeight * 0.85f
 
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(startX, endY)
         }
-
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 200))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
             .build()
-
         dispatchGesture(gesture, null, null)
+
+        handler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 120)
+    }
+
+    private fun performClickAction(node: AccessibilityNodeInfo) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+
+        val x = if (rect.centerX() > 0) rect.centerX().toFloat() else screenWidth * 0.5f
+        val y = if (rect.centerY() > 0) rect.centerY().toFloat() else screenHeight * 0.85f
+
+        val delay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (60L..150L).random() else 20L
+
+        handler.postDelayed({
+            // 1. Hardware-level physical touch coordinate tap
+            val path = Path().apply {
+                moveTo(x, y)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 40))
+                .build()
+            dispatchGesture(gesture, null, null)
+
+            // 2. Direct accessibility node click
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            node.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }, delay)
     }
 
     override fun onInterrupt() {
