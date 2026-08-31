@@ -178,6 +178,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         checkOverlayPermission()
+        FloatingWidgetService.refreshIconState()
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -233,6 +234,10 @@ fun AutoSetupScreen() {
     var fastMode by remember { mutableStateOf(RideAccessibilityService.isFastTurboMode) }
     var botActive by remember { mutableStateOf(RideAccessibilityService.isBotRunning) }
     var floatWidgetEnabled by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        botActive = RideAccessibilityService.isBotRunning
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -316,8 +321,10 @@ fun AutoSetupScreen() {
 
         FloatingActionButton(
             onClick = {
-                botActive = !botActive
-                RideAccessibilityService.isBotRunning = botActive
+                val newState = !RideAccessibilityService.isBotRunning
+                RideAccessibilityService.isBotRunning = newState
+                botActive = newState
+                FloatingWidgetService.refreshIconState()
             },
             containerColor = if (botActive) PrimaryGreen else AlertRed,
             contentColor = Color.Black,
@@ -424,7 +431,6 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        // --- FARE CONTROLS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -516,7 +522,6 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- 📍 PICKUP DISTANCE TAB (0 km to 5.0 km) ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -559,7 +564,6 @@ fun SettingsScreen() {
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Quick Pickup Preset Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -586,7 +590,6 @@ fun SettingsScreen() {
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Slider from 0.2 km to 5.0 km
                 Slider(
                     value = maxPickupKm.toFloat(),
                     onValueChange = { newValue ->
@@ -608,7 +611,6 @@ fun SettingsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- AREA FILTERS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
