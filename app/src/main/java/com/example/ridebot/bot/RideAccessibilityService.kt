@@ -55,7 +55,7 @@ class RideAccessibilityService : AccessibilityService() {
     }
 
     private fun processScreen(root: AccessibilityNodeInfo) {
-        val allNodes = mutableListOf<AccessibilityNodeInfo>()
+        val allNodes = ArrayList<AccessibilityNodeInfo>()
         collectAllNodes(root, allNodes)
 
         var detectedFare: Double? = null
@@ -68,34 +68,34 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // --- FARE BASED DECISION ---
         if (detectedFare != null) {
             Log.d(TAG, "Detected Fare: ₹$detectedFare")
 
-            // 🔴 REJECT CONDITION: Agar fare Min Fare se kam hai
             if (detectedFare < rejectBelowFare) {
                 Log.d(TAG, "Fare ₹$detectedFare is BELOW threshold ₹$rejectBelowFare -> REJECTING RIDE")
                 performRejectAction(allNodes)
                 return
             }
 
-            // 🟢 ACCEPT CONDITION: Agar fare Max/Accept Fare se barabar ya zyada hai
             if (detectedFare >= acceptAboveFare) {
                 Log.d(TAG, "Fare ₹$detectedFare is ABOVE threshold ₹$acceptAboveFare -> ACCEPTING RIDE")
                 performAcceptAction(allNodes)
                 return
             }
         } else {
-            // Agar fare detect nahi hua lekin auto mode active hai toh check karein
             performAcceptAction(allNodes)
         }
     }
 
-    private fun collectAllNodes(node: AccessibilityNodeInfo?, list: mutableListOf<AccessibilityNodeInfo> = mutableListOf()) {
+    private fun collectAllNodes(node: AccessibilityNodeInfo?, list: ArrayList<AccessibilityNodeInfo>) {
         if (node == null) return
         list.add(node)
-        for (i in 0 until node.childCount) {
-            collectAllNodes(node.getChild(i), list)
+        val count = node.childCount
+        for (i in 0 until count) {
+            val child = node.getChild(i)
+            if (child != null) {
+                collectAllNodes(child, list)
+            }
         }
     }
 
@@ -108,22 +108,21 @@ class RideAccessibilityService : AccessibilityService() {
     private fun performRejectAction(nodes: List<AccessibilityNodeInfo>) {
         var clicked = false
 
-        // 1. Search for Reject / Cross / Dismiss keywords or view IDs
         for (node in nodes) {
             val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim().lowercase()
             val viewId = node.viewIdResourceName?.lowercase() ?: ""
 
             val isRejectBtn = text.contains("reject") ||
-                              text.contains("decline") ||
-                              text.contains("cancel") ||
-                              text.contains("dismiss") ||
-                              text.contains("skip") ||
-                              text.contains("✕") ||
-                              text.contains("x") ||
-                              viewId.contains("reject") ||
-                              viewId.contains("close") ||
-                              viewId.contains("cancel") ||
-                              viewId.contains("cross")
+                    text.contains("decline") ||
+                    text.contains("cancel") ||
+                    text.contains("dismiss") ||
+                    text.contains("skip") ||
+                    text.contains("✕") ||
+                    text.contains("x") ||
+                    viewId.contains("reject") ||
+                    viewId.contains("close") ||
+                    viewId.contains("cancel") ||
+                    viewId.contains("cross")
 
             if (isRejectBtn) {
                 Log.d(TAG, "Reject button matched: $text | ID: $viewId")
@@ -133,10 +132,9 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. Fallback: Tap near the top-right cross icon of ride popup if not found
         if (!clicked) {
             Log.d(TAG, "Tapping fallback top-right reject coordinate")
-            clickCoordinate((screenWidth * 0.88f), (screenHeight * 0.35f))
+            clickCoordinate((screenWidth * 0.88f), (screenHeight * 0.35f), null)
         }
     }
 
@@ -146,12 +144,12 @@ class RideAccessibilityService : AccessibilityService() {
             val viewId = node.viewIdResourceName?.lowercase() ?: ""
 
             val isAcceptBtn = text.contains("accept") || 
-                              text.contains("स्वीकार") || 
-                              text.contains("take ride") || 
-                              text.contains("book") ||
-                              text.contains("order") ||
-                              viewId.contains("accept") || 
-                              viewId.contains("confirm")
+                    text.contains("स्वीकार") || 
+                    text.contains("take ride") || 
+                    text.contains("book") ||
+                    text.contains("order") ||
+                    viewId.contains("accept") || 
+                    viewId.contains("confirm")
 
             if (isAcceptBtn) {
                 Log.d(TAG, "Accept button matched: $text")
@@ -173,7 +171,7 @@ class RideAccessibilityService : AccessibilityService() {
         clickCoordinate(rect.centerX().toFloat(), rect.centerY().toFloat(), node)
     }
 
-    private fun clickCoordinate(x: Float, y: Float, fallbackNode: AccessibilityNodeInfo? = null) {
+    private fun clickCoordinate(x: Float, y: Float, fallbackNode: AccessibilityNodeInfo?) {
         val clickDelay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (150L..350L).random() else 50L
 
         handler.postDelayed({
