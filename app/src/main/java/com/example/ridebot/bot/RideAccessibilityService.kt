@@ -42,7 +42,8 @@ class RideAccessibilityService : AccessibilityService() {
         var isAntiBotEnabled = true
         var minTargetFare: Double = 1.0
         var maxTargetFare: Double = 2000.0
-        var maxPickupDistanceKm: Double = 5.0 // Default 5.0 km
+        var maxPickupDistanceKm: Double = 5.0
+        var rejectBikeBoost: Boolean = true // 🚫 Set true to automatically reject Bike Boost orders
 
         val rideLogs = mutableStateListOf<RideLogItem>()
 
@@ -85,7 +86,6 @@ class RideAccessibilityService : AccessibilityService() {
         val metrics: DisplayMetrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
-        Log.d(TAG, "Service Connected: $screenWidth x $screenHeight")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -115,26 +115,42 @@ class RideAccessibilityService : AccessibilityService() {
 
         if (allNodes.isEmpty()) return
 
-        // 1. Find Action Button (Confirm or Accept)
         val actionButton = findActionTarget(allNodes) ?: return
-
-        // 2. Parse Real Main Fare
         val detectedFare = parseFareFromOfferCard(allNodes)
         val rideDetails = parseRideDetails(allNodes)
         val pickupKmValue = extractKmNumber(rideDetails.pickupDist)
 
         lastActionTimestamp = currentTime
 
-        Log.d(TAG, "🚀 Offer Detected on $appDetected! Fare: ₹$detectedFare | Pickup: ${rideDetails.pickupDist} | Button: ${actionButton.text}")
+        // 🚫 RAPIDO BIKE BOOST DETECTION
+        val isBikeBoost = isBikeBoostOffer(allNodes)
 
-        // 3. AGAR BOT ON HAI
         if (isBotRunning) {
             val finalFare = detectedFare ?: 0.0
+
+            // 1. Agar Bike Boost hai toh TURANT REJECT karo
+            if (rejectBikeBoost && isBikeBoost) {
+                Log.d(TAG, "🚫 Bike Boost Detected! Auto-Rejecting ride...")
+                executeRejectAction(allNodes, actionButton)
+                addLog(
+                    appName = appDetected,
+                    fare = finalFare,
+                    pickupDist = rideDetails.pickupDist,
+                    dropDist = rideDetails.dropDist,
+                    pickupLoc = rideDetails.pickupLoc,
+                    dropLoc = rideDetails.dropLoc,
+                    status = RideStatus.REJECTED,
+                    note = "Auto-rejected: Bike Boost ride blocked"
+                )
+                return
+            }
+
+            // 2. Normal Ride Criteria
             val isFareInRange = (finalFare in minTargetFare..maxTargetFare) || (finalFare == 0.0 && minTargetFare <= 10.0)
             val isPickupInRange = (pickupKmValue == null) || (pickupKmValue <= maxPickupDistanceKm)
 
             if (isFareInRange && isPickupInRange) {
-                // 🟢 ACCEPT ACTION (Physical Gesture + Node Click)
+                // 🟢 ACCEPT
                 performAcceptClick(actionButton)
                 addLog(
                     appName = appDetected,
@@ -144,10 +160,10 @@ class RideAccessibilityService : AccessibilityService() {
                     pickupLoc = rideDetails.pickupLoc,
                     dropLoc = rideDetails.dropLoc,
                     status = RideStatus.AUTO_ACCEPTED,
-                    note = "Auto accepted: ₹$finalFare (Pickup: ${rideDetails.pickupDist})"
+                    note = "Auto accepted: ₹$finalFare (Regular Bike)"
                 )
             } else {
-                // 🔴 REJECT ACTION
+                // 🔴 REJECT (Fare or Distance limit)
                 val rejectReason = if (!isFareInRange) "Fare ₹$finalFare out of range" else "Pickup ${rideDetails.pickupDist} > $maxPickupDistanceKm km limit"
                 executeRejectAction(allNodes, actionButton)
                 addLog(
@@ -162,6 +178,13 @@ class RideAccessibilityService : AccessibilityService() {
                 )
             }
         }
+    }
+
+    private fun isBikeBoostOffer(nodes: List<AccessibilityNodeInfo>): Boolean {
+        val texts = nodes.mapNotNull { it.text?.toString() ?: it.contentDescription?.toString() }
+            .map { it.trim().lowercase() }
+
+        return texts.any { it.contains("boost") || it.contains("bike boost") }
     }
 
     private fun extractKmNumber(distStr: String): Double? {
@@ -179,7 +202,6 @@ class RideAccessibilityService : AccessibilityService() {
         val fareCandidates = mutableListOf<Double>()
 
         for (t in texts) {
-            // Ignore extra/premium/hourly lines
             if (t.contains("/hr", ignoreCase = true) ||
                 t.contains("active hr", ignoreCase = true) ||
                 t.contains("Includes", ignoreCase = true) ||
@@ -203,12 +225,10 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Return the first dominant fare found (e.g. ₹41.86)
         if (fareCandidates.isNotEmpty()) {
             return fareCandidates[0]
         }
 
-        // Fallback plain number
         for (t in texts) {
             if (!t.contains("km", ignoreCase = true) && !t.contains("min", ignoreCase = true) && !t.contains("★")) {
                 if (t.matches(Regex("""^\d+(\.\d{1,2})?$"""))) {
@@ -330,7 +350,7 @@ class RideAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Rapido Minus Fallback
+        // Rapido Minus Button Tap
         val rect = Rect()
         actionBtn.getBoundsInScreen(rect)
         if (rect.left > 120) {
@@ -340,7 +360,7 @@ class RideAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Uber Cross Fallback (Top Right of sheet)
+        // Uber Cross Tap
         val crossX = screenWidth * 0.85f
         val crossY = screenHeight * 0.38f
         clickDirectCoordinate(crossX, crossY, null)
@@ -350,7 +370,6 @@ class RideAccessibilityService : AccessibilityService() {
         val rect = Rect()
         node.getBoundsInScreen(rect)
 
-        // Uber / Rapido Bottom Action coordinates
         val x = if (rect.centerX() > 0) rect.centerX().toFloat() else screenWidth * 0.5f
         val y = if (rect.centerY() > 0) rect.centerY().toFloat() else screenHeight * 0.92f
 
@@ -371,7 +390,6 @@ class RideAccessibilityService : AccessibilityService() {
         val delay = if (isFastTurboMode) 0L else if (isAntiBotEnabled) (20L..50L).random() else 10L
 
         handler.postDelayed({
-            // 1. Hardware-level Physical Touch (100ms gesture ensures registration on HyperOS/OxygenOS/Android 13/14)
             val path = Path().apply {
                 moveTo(x, y)
             }
@@ -380,7 +398,6 @@ class RideAccessibilityService : AccessibilityService() {
                 .build()
             dispatchGesture(gesture, null, null)
 
-            // 2. Direct Node Click
             node?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             node?.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }, delay)
