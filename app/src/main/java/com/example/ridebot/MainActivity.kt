@@ -11,6 +11,7 @@ import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.navigation.compose.*
 import com.example.ridebot.bot.FloatingWidgetService
 import com.example.ridebot.bot.RideAccessibilityService
@@ -41,10 +43,10 @@ import com.example.ridebot.bot.RideStatus
 import java.util.*
 
 val BgDark = Color(0xFF0D0F0E)
-val CardDark = Color(0xFF1B1E1C)
+val CardDark = Color(0xFF181A19)
 val CardBorder = Color(0xFF2B332E)
 val PrimaryGreen = Color(0xFF00E676)
-val InfoBlue = Color(0xFF29B6F6)
+val InfoBlue = Color(0xFF1E88E5)
 val AlertRed = Color(0xFFFF5252)
 val WarningOrange = Color(0xFFFF9100)
 val WarningYellow = Color(0xFFFFD600)
@@ -528,11 +530,11 @@ fun SettingsScreen() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Navigation, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Navigation, contentDescription = null, tint = Color(0xFF29B6F6), modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Max Pickup Distance", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
-            Text("${String.format("%.1f", maxPickupKm)} km", color = InfoBlue, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("${String.format("%.1f", maxPickupKm)} km", color = Color(0xFF29B6F6), fontWeight = FontWeight.Bold, fontSize = 18.sp)
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -552,11 +554,11 @@ fun SettingsScreen() {
                         modifier = Modifier.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Info, contentDescription = null, tint = InfoBlue, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF29B6F6), modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             "Pickup ${String.format("%.1f", maxPickupKm)} km se kam hoga toh accept karega, zyada door hua toh reject.",
-                            color = InfoBlue,
+                            color = Color(0xFF29B6F6),
                             fontSize = 12.sp
                         )
                     }
@@ -576,7 +578,7 @@ fun SettingsScreen() {
                                 RideAccessibilityService.maxPickupDistanceKm = km
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isSelected) InfoBlue else Color(0xFF191C1A),
+                                containerColor = if (isSelected) Color(0xFF29B6F6) else Color(0xFF191C1A),
                                 contentColor = if (isSelected) Color.Black else Color.LightGray
                             ),
                             shape = RoundedCornerShape(10.dp),
@@ -600,8 +602,8 @@ fun SettingsScreen() {
                     valueRange = 0.2f..5.0f,
                     steps = 23,
                     colors = SliderDefaults.colors(
-                        thumbColor = InfoBlue,
-                        activeTrackColor = InfoBlue,
+                        thumbColor = Color(0xFF29B6F6),
+                        activeTrackColor = Color(0xFF29B6F6),
                         inactiveTrackColor = Color(0xFF2B332E)
                     ),
                     modifier = Modifier.fillMaxWidth()
@@ -814,10 +816,228 @@ fun SettingsScreen() {
     }
 }
 
+// -------------------------------------------------------------
+// 📋 JOB HISTORY & INTERACTIVE DETAIL POPUP DIALOG
+// -------------------------------------------------------------
 @Composable
 fun LogsScreen() {
     val logs = RideAccessibilityService.rideLogs
+    var selectedItemForDetail by remember { mutableStateOf<RideLogItem?>(null) }
 
+    // POPUP DIALOG (Jaisa Autixo app me khulta hai)
+    if (selectedItemForDetail != null) {
+        val item = selectedItemForDetail!!
+        Dialog(onDismissRequest = { selectedItemForDetail = null }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = Color(0xFF1F2224),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    // Top Tag Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "RECENT ASSISTED JOB",
+                            color = Color(0xFFAAAAAA),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                        Text(
+                            text = if (item.appName.contains("Rapido", ignoreCase = true)) "R - CAPTAIN" else item.appName.uppercase(),
+                            color = WarningYellow,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // White Inner Card Preview (Exact replica of Rapido / Uber request card)
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            // Badge Tag (Bike Boost or Regular Bike)
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xFFF0F1F5)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.TwoWheeler,
+                                        contentDescription = null,
+                                        tint = Color(0xFF333333),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (item.note.contains("Boost", ignoreCase = true)) "Bike Boost" else "Bike",
+                                        color = Color(0xFF222222),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Large Bold Fare Text
+                            Text(
+                                text = if (item.fare > 0) "₹${if (item.fare % 1.0 == 0.0) item.fare.toInt() else item.fare}" else "₹--",
+                                color = Color(0xFF1B1B1B),
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Pickup Row
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .background(Color.Black, CircleShape)
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.dp)
+                                            .height(34.dp)
+                                            .background(Color(0xFF757575))
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = item.pickupDist.ifEmpty { "1.5 km" },
+                                        color = Color.Black,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = item.pickupLocation.ifEmpty { "Detected Pickup Address" },
+                                        color = Color(0xFF555555),
+                                        fontSize = 12.sp,
+                                        maxLines = 2
+                                    )
+                                }
+                            }
+
+                            // Drop Row
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .padding(top = 2.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = item.dropDist.ifEmpty { "Distance calculated" },
+                                        color = Color.Black,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = item.dropLocation.ifEmpty { "Detected Drop Address" },
+                                        color = Color(0xFF555555),
+                                        fontSize = 12.sp,
+                                        maxLines = 2
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(18.dp))
+
+                            // Bottom Buttons Preview (Minus circle & Yellow Accept)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color.White,
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .border(2.dp, Color(0xFFCFD8DC), CircleShape)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            "➖",
+                                            fontSize = 16.sp,
+                                            color = Color.DarkGray
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Surface(
+                                    shape = RoundedCornerShape(26.dp),
+                                    color = Color(0xFFFFC82C),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(46.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "Accept",
+                                            color = Color(0xFF1A1A1A),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // Big Blue Close Window Button
+                    Button(
+                        onClick = { selectedItemForDetail = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF007AFF)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Text(
+                            text = "CLOSE WINDOW",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MAIN JOB HISTORY FEED
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -828,20 +1048,67 @@ fun LogsScreen() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "📋 Ride Activity Logs",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Column {
+                Text(
+                    text = "Job History",
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Review your assisted task history",
+                    color = TextGray,
+                    fontSize = 13.sp
+                )
+            }
             if (logs.isNotEmpty()) {
                 TextButton(onClick = { logs.clear() }) {
-                    Text("Clear All", color = AlertRed, fontSize = 13.sp)
+                    Text("Clear All", color = AlertRed, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Filter chips bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF1B1E1C),
+                modifier = Modifier
+                    .weight(1f)
+                    .border(1.dp, Color(0xFF333333), RoundedCornerShape(14.dp))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("All Status", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = TextGray)
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF1B1E1C),
+                modifier = Modifier
+                    .weight(1f)
+                    .border(1.dp, Color(0xFF333333), RoundedCornerShape(14.dp))
+            ) {
+                Box(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("All Platforms", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         if (logs.isEmpty()) {
             Box(
@@ -852,73 +1119,50 @@ fun LogsScreen() {
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        Icons.Default.ListAlt,
+                        Icons.Default.History,
                         contentDescription = null,
                         tint = TextGray,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(54.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("No Rides Processed Yet", color = TextGray, fontSize = 15.sp)
-                    Text("All auto, manual, rejected and missed rides will show here", color = Color(0xFF555555), fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text("No Job History Available", color = TextGray, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Incoming & processed rides will appear here", color = Color(0xFF555555), fontSize = 12.sp)
                 }
             }
         } else {
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(logs, key = { it.id }) { item ->
-                    val statusColor = when (item.status) {
-                        RideStatus.AUTO_ACCEPTED -> PrimaryGreen
-                        RideStatus.MANUAL_ACCEPTED -> InfoBlue
-                        RideStatus.REJECTED -> AlertRed
-                        RideStatus.MISSED -> WarningOrange
-                    }
-
-                    val statusBg = when (item.status) {
-                        RideStatus.AUTO_ACCEPTED -> Color(0xFF14261B)
-                        RideStatus.MANUAL_ACCEPTED -> Color(0xFF14222B)
-                        RideStatus.REJECTED -> Color(0xFF261818)
-                        RideStatus.MISSED -> Color(0xFF2B2114)
-                    }
-
-                    val statusText = when (item.status) {
-                        RideStatus.AUTO_ACCEPTED -> "AUTO ACCEPTED"
-                        RideStatus.MANUAL_ACCEPTED -> "MANUAL ACCEPTED"
-                        RideStatus.REJECTED -> "REJECTED"
-                        RideStatus.MISSED -> "MISSED / TIMEOUT"
+                    val borderColor = when (item.status) {
+                        RideStatus.AUTO_ACCEPTED -> Color(0xFF2E7D32)
+                        RideStatus.MANUAL_ACCEPTED -> Color(0xFF1976D2)
+                        RideStatus.REJECTED -> Color(0xFFD32F2F)
+                        RideStatus.MISSED -> Color(0xFFE65100)
                     }
 
                     Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = statusBg),
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF151716)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            // Top Row: Platform & Fare
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.Top
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        when (item.status) {
-                                            RideStatus.AUTO_ACCEPTED, RideStatus.MANUAL_ACCEPTED -> Icons.Default.CheckCircle
-                                            RideStatus.REJECTED -> Icons.Default.Cancel
-                                            RideStatus.MISSED -> Icons.Default.AccessTime
-                                        },
-                                        contentDescription = null,
-                                        tint = statusColor,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                Column {
                                     Text(
-                                        text = item.appName,
-                                        color = Color.White,
+                                        text = if (item.appName.contains("Rapido", ignoreCase = true)) "R - CAPTAIN" else item.appName.uppercase(),
+                                        color = WarningYellow,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp
+                                        fontSize = 13.sp
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = item.timestamp,
                                         color = TextGray,
@@ -926,69 +1170,73 @@ fun LogsScreen() {
                                     )
                                 }
 
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = if (item.fare > 0) "₹${item.fare}" else "Offer",
-                                        color = statusColor,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 18.sp
-                                    )
-                                    Text(
-                                        text = statusText,
-                                        color = statusColor,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-                            HorizontalDivider(color = Color(0xFF2B332E), thickness = 0.5.dp)
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.TripOrigin, contentDescription = null, tint = PrimaryGreen, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Pickup (${item.pickupDist.ifEmpty { "Near" }}): ",
-                                        color = PrimaryGreen,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = item.pickupLocation.ifEmpty { "Location detected" },
-                                        color = Color.LightGray,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = AlertRed, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Drop (${item.dropDist.ifEmpty { "Distance" }}): ",
-                                        color = AlertRed,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = item.dropLocation.ifEmpty { "Location detected" },
-                                        color = Color.LightGray,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-
-                            if (item.note.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = item.note,
-                                    color = Color(0xFF888888),
-                                    fontSize = 11.sp
+                                    text = if (item.fare > 0) "₹${if (item.fare % 1.0 == 0.0) item.fare.toInt() else item.fare}" else "₹--",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 22.sp
                                 )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = Color(0xFF262A28), thickness = 0.5.dp)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Distance & Details Overview
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text("PICKUP", color = TextGray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        item.pickupDist.ifEmpty { "Near" },
+                                        color = PrimaryGreen,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("TOTAL DISTANCE", color = TextGray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        item.dropDist.ifEmpty { "Detected" },
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // 👁 VIEW JOB DETAILS BUTTON (Opens the Popup!)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF252928),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedItemForDetail = item }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = Color(0xFFB388FF),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "VIEW JOB DETAILS",
+                                        color = Color(0xFFD1C4E9),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
                             }
                         }
                     }
